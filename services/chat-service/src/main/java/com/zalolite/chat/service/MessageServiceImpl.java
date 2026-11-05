@@ -6,6 +6,8 @@ import com.zalolite.chat.domain.MessageStatus;
 import com.zalolite.chat.repository.ConversationRepository;
 import com.zalolite.chat.repository.MessageRepository;
 import com.zalolite.common.core.BusinessException;
+import com.zalolite.chat.domain.ConversationType;
+import com.zalolite.chat.client.GroupAccessClient;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -17,12 +19,14 @@ public class MessageServiceImpl implements MessageService {
     private final ConversationRepository conversations;
     private final MessageRepository messages;
     private final StringRedisTemplate redis;
+    private final GroupAccessClient groupAccess;
 
     public MessageServiceImpl(ConversationRepository conversations, MessageRepository messages,
-                              StringRedisTemplate redis) {
+                              StringRedisTemplate redis, GroupAccessClient groupAccess) {
         this.conversations = conversations;
         this.messages = messages;
         this.redis = redis;
+        this.groupAccess = groupAccess;
     }
 
     @Override
@@ -53,7 +57,11 @@ public class MessageServiceImpl implements MessageService {
     public List<Message> history(String conversationId, String userId, int limit, Long beforeSeq) {
         checkMember(conversationId, userId);
         int pageSize = Math.max(1, Math.min(limit, 100));
-        return messages.findByConversationIdOrderBySeqDesc(conversationId, PageRequest.of(0, pageSize));
+        if (beforeSeq == null) {
+            return messages.findByConversationIdOrderBySeqDesc(conversationId, PageRequest.of(0, pageSize));
+        }
+        return messages.findByConversationIdAndSeqLessThanOrderBySeqDesc(
+                conversationId, beforeSeq, PageRequest.of(0, pageSize));
     }
 
     @Override
@@ -79,7 +87,12 @@ public class MessageServiceImpl implements MessageService {
         Conversation conversation = conversations.findById(conversationId)
                 .orElseThrow(() -> new BusinessException("Conversation not found"));
         if (!conversation.getMemberIds().contains(userId)) {
-            throw new BusinessException("User is not a conversation member");
+            boolean hasGroupAccess = conversation.getType() == ConversationType.GROUP
+                    && conversation.getGroupId() != null
+                    && groupAccess.canAccess(conversation.getGroupId(), userId);
+            if (!hasGroupAccess) {
+                throw new BusinessException("User is not a conversation member");
+            }
         }
     }
 }

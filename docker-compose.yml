@@ -1,0 +1,52 @@
+services:
+  mysql-user:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: zalolite
+      MYSQL_DATABASE: user_db
+    volumes: ["zalolite_user_mysql:/var/lib/mysql"]
+  mysql-group:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: zalolite
+      MYSQL_DATABASE: group_db
+    volumes: ["zalolite_group_mysql:/var/lib/mysql"]
+  mongo:
+    image: mongo:7
+  redis:
+    image: redis:7-alpine
+  gateway:
+    build: services/api-gateway
+    ports: ["8080:8080"]
+    depends_on: [user-service, group-service, chat-service]
+  user-service:
+    build: services/user-service
+    environment:
+      SPRING_PROFILES_ACTIVE: mysql
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql-user:3306/user_db
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: zalolite
+      JWT_SECRET: zalolite-development-secret-at-least-32-bytes-long
+    depends_on: [mysql-user]
+  group-service:
+    build: services/group-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql-group:3306/group_db
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: zalolite
+    depends_on: [mysql-group]
+  chat-service:
+    build: services/chat-service
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/chat_db
+      SPRING_DATA_REDIS_HOST: redis
+      GROUP_SERVICE_URL: http://group-service:8082
+      JWT_SECRET: zalolite-development-secret-at-least-32-bytes-long
+    depends_on: [mongo, redis, group-service]
+  frontend:
+    build: frontend
+    ports: ["80:80"]
+    depends_on: [gateway]
+volumes:
+  zalolite_user_mysql:
+  zalolite_group_mysql:

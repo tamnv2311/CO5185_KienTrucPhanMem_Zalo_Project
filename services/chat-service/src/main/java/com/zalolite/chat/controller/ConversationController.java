@@ -41,6 +41,18 @@ public class ConversationController {
         return ApiResponse.ok(conversations.save(conversation));
     }
 
+    @PostMapping("/group")
+    public ApiResponse<Conversation> group(@RequestHeader("X-User-Id") String userId,
+                                           @RequestParam String groupId,
+                                           @RequestParam(required = false) String peerId) {
+        Conversation conversation = new Conversation();
+        conversation.setId(UUID.randomUUID().toString());
+        conversation.setType(ConversationType.GROUP);
+        conversation.setGroupId(groupId);
+        conversation.setMemberIds(peerId == null ? List.of(userId) : List.of(userId, peerId));
+        return ApiResponse.ok(conversations.save(conversation));
+    }
+
     @GetMapping("/{conversationId}")
     public ApiResponse<Conversation> get(@RequestHeader("X-User-Id") String userId,
                                          @PathVariable String conversationId) {

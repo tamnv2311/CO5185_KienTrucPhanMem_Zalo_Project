@@ -12,6 +12,7 @@ public class Conversation {
     private String id;
     private ConversationType type;
     private List<String> memberIds = new ArrayList<>();
+    private String groupId;
     private Message lastMessage;
 
     public String getId() { return id; }
@@ -20,6 +21,8 @@ public class Conversation {
     public void setType(ConversationType type) { this.type = type; }
     public List<String> getMemberIds() { return memberIds; }
     public void setMemberIds(List<String> memberIds) { this.memberIds = memberIds; }
+    public String getGroupId() { return groupId; }
+    public void setGroupId(String groupId) { this.groupId = groupId; }
     public Message getLastMessage() { return lastMessage; }
     public void setLastMessage(Message lastMessage) { this.lastMessage = lastMessage; }
 }

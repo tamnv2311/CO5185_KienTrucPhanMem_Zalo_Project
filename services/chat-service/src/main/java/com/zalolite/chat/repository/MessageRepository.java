@@ -10,4 +10,6 @@ import java.util.Optional;
 public interface MessageRepository extends MongoRepository<Message, String> {
     Optional<Message> findByConversationIdAndClientMsgId(String conversationId, String clientMsgId);
     List<Message> findByConversationIdOrderBySeqDesc(String conversationId, Pageable pageable);
+    List<Message> findByConversationIdAndSeqLessThanOrderBySeqDesc(
+            String conversationId, long seq, Pageable pageable);
 }
