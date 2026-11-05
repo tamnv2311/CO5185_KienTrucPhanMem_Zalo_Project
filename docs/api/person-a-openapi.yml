@@ -1,0 +1,77 @@
+openapi: 3.0.3
+info:
+  title: ZaloLite Core API
+  version: 1.0.0
+paths:
+  /api/auth/register:
+    post:
+      summary: Register an account
+      security: []
+      responses:
+        "200":
+          description: Account and tokens
+  /api/auth/login:
+    post:
+      summary: Login
+      security: []
+      responses:
+        "200":
+          description: Account and tokens
+  /api/auth/refresh:
+    post:
+      summary: Refresh access token
+      security: []
+      responses:
+        "200":
+          description: New tokens
+  /api/auth/logout:
+    post:
+      summary: Revoke refresh token
+      security: []
+      responses:
+        "200":
+          description: Logged out
+  /api/users/me:
+    get:
+      summary: Get current profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Profile
+    put:
+      summary: Update current profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Updated profile
+  /api/friends/requests:
+    post:
+      summary: Send friend request
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pending friendship
+  /api/groups:
+    get:
+      summary: List my groups
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Groups
+    post:
+      summary: Create group
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Created group
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

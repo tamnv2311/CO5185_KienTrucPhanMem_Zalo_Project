@@ -1,0 +1,621 @@
+Kiến trúc và kế hoạch triển khai Zalo-lite cho nhóm 3 người
+
+Với đề bài này, nên chọn microservices vừa phải (5-6 service), giao tiếp event-driven, và polyglot persistence. Cách này vừa đủ “đất” để áp dụng nhiều giải pháp kiến trúc trong báo cáo, vừa không quá nặng cho 3 người trong khoảng 9 tuần.
+
+1. Kiến trúc tổng thể
+ [Web/Flutter Client]
+        │ HTTPS (REST)            │ WSS (WebSocket/STOMP)
+        ▼                         ▼
+ ┌──────────────────────────────────────────┐
+ │  API Gateway (Spring Cloud Gateway)      │  JWT verify, rate limit, routing
+ └──────────────────────────────────────────┘
+   │          │           │          │            │
+   ▼          ▼           ▼          ▼            ▼
+ User/Auth   Group      Chat       Media       Statistics
+ Service     Service    Service    Service     Service
+ (MySQL)     (MySQL)    (MongoDB   (MinIO/S3   (MySQL
+                        + Redis)   + metadata)  aggregates)
+   │          │           │          │            ▲
+   └──────────┴───────────┴──────────┴────────────┘
+                  Message Broker (RabbitMQ/Kafka)
+                  events: user.registered, group.created,
+                  message.sent, media.uploaded, ...
+
+Thành phần và lý do chọn:
+
+Thành phần	Công nghệ	Vai trò
+API Gateway	Spring Cloud Gateway	Điểm vào duy nhất, xác thực JWT, rate limiting, routing
+User/Auth Service	Spring Boot + MySQL	Đăng ký, đăng nhập, profile, danh sách bạn bè, phân quyền
+Group Service	Spring Boot + MySQL	Tạo nhóm, thành viên, vai trò (owner/admin/member)
+Chat Service	Spring Boot + WebSocket (STOMP) + MongoDB + Redis	Chat 1-1 và group, lưu tin nhắn, trạng thái sent/delivered/seen, presence
+Media Service	Spring Boot + MinIO (hoặc S3)	Upload image/video/document, presigned URL, thumbnail
+Statistics Service	Spring Boot + MySQL	Consume event, tổng hợp số liệu, API dashboard
+Broker	RabbitMQ (đơn giản) hoặc Kafka	Tách rời service, phục vụ thống kê bất đồng bộ
+Redis	Redis	Presence online/offline, cache, pub/sub để scale WebSocket
+Frontend	Angular/React (web) hoặc Flutter	Màn hình login, danh sách chat, khung chat, quản lý nhóm, dashboard
+
+Vì sao polyglot persistence: tin nhắn là dữ liệu ghi nhiều, dạng document, phân trang theo thời gian, nên hợp MongoDB. Tài khoản và nhóm có quan hệ chặt, cần transaction, nên dùng MySQL. Presence và cache dùng Redis.
+
+2. Các quyết định kiến trúc quan trọng (ADR)
+
+Mỗi quyết định nên viết thành một ADR ngắn để đưa vào báo cáo.
+
+Database per service: mỗi service sở hữu dữ liệu riêng và không join chéo DB.
+Giao tiếp: REST cho truy vấn đồng bộ, event qua broker cho thống kê và thông báo.
+Thống kê theo CQRS đơn giản: Chat/User/Media chỉ phát event, Statistics tự consume và lưu bảng tổng hợp theo ngày. Truy vấn dashboard không ảnh hưởng hiệu năng chat.
+Thứ tự và độ tin cậy tin nhắn:
+Mỗi conversation có số thứ tự seq tăng dần.
+Client gửi kèm clientMsgId để idempotent, tránh trùng khi retry.
+Trạng thái sent → delivered → seen.
+Scale WebSocket: nhiều instance Chat Service dùng Redis pub/sub hoặc broker relay để đẩy tin đến đúng người đang kết nối ở instance khác.
+Media: client upload thẳng lên object storage bằng presigned URL, không đi qua service (giảm tải). Service chỉ lưu metadata và giới hạn loại/kích thước file.
+Bảo mật: JWT access token ngắn hạn + refresh token, mã hóa mật khẩu bằng BCrypt, kiểm tra quyền thành viên trước khi đọc/gửi tin nhắn nhóm.
+Resilience: dùng Resilience4j (timeout, retry, circuit breaker) cho lời gọi giữa các service.
+Triển khai: Docker từng service, Docker Compose cho môi trường dev và demo, GitHub Actions cho CI/CD, deploy lên cloud (VPS, AWS, Azure hoặc GCP free tier). Với 3 người, một VM chạy Docker Compose là đủ; Kubernetes chỉ nên trình bày như hướng mở rộng.
+Observability: log tập trung có traceId, Spring Actuator + Prometheus/Grafana (có thể làm nhẹ).
+3. Mô hình dữ liệu tóm tắt
+MySQL – User: users(id, phone/email, password_hash, display_name, avatar, status), friendships(user_id, friend_id, status)
+MySQL – Group: groups(id, name, owner_id, avatar), group_members(group_id, user_id, role, joined_at)
+MongoDB – Chat: conversations(id, type[1-1|group], members[], lastMessage), messages(id, conversationId, seq, senderId, type[text|image|video|doc|emoji], content, mediaRef, status, createdAt)
+MySQL – Stats: daily_user_activity(date, user_id, msg_count, media_count), daily_system_stats(date, total_msg, active_users, new_users), group_activity(date, group_id, msg_count)
+4. Phân công 3 thành viên
+
+Chia theo mảng chuyên trách để mỗi người sở hữu một phần chạy được từ đầu đến cuối.
+
+Thành viên	Vai trò	Phụ trách
+A (Nhóm trưởng)	Backend core + DevOps	Gateway, User/Auth Service, Group Service, Docker/CI-CD, cloud deploy, tài liệu kiến trúc (C4, ADR)
+B	Backend realtime	Chat Service (WebSocket, MongoDB, Redis), Media Service, event publishing
+C	Frontend + Analytics	Giao diện web/mobile, Statistics Service + dashboard, kiểm thử E2E
+
+Cả nhóm cùng làm báo cáo, mỗi người viết phần mình phụ trách. Chốt hợp đồng API (OpenAPI/Swagger) và schema event ở tuần 3 để frontend và backend làm song song.
+
+5. Kế hoạch theo tuần (release module lên cloud hàng tuần)
+Tuần	Mục tiêu	A	B	C	Release
+1-2	Requirement, đăng ký nhóm	Viết use case, yêu cầu phi chức năng (QA)	Thống nhất công nghệ, user story	Wireframe các màn hình	–
+3	Design + khung dự án	C4, ADR, monorepo, Docker Compose, CI, cloud environment	Thiết kế schema Mongo, định nghĩa event	OpenAPI contract, khung frontend	Skeleton + hello world trên cloud
+4	Tài khoản	Auth/User Service + Gateway (JWT)	Dựng khung Chat Service, kết nối Mongo/Redis	Màn hình đăng ký/đăng nhập/profile	R1: Account
+5	Bạn bè và nhóm	Group Service, kết bạn	WebSocket handshake có xác thực, presence	Màn hình danh bạ, quản lý nhóm	R2: Group + Friend
+6	Chat 1-1 text	Hỗ trợ phân quyền, kiểm thử tích hợp	Gửi/nhận realtime, lưu tin, phân trang, seen/delivered	Giao diện khung chat realtime	R3: Chat 1-1
+7	Chat nhóm + media	Event thành viên nhóm	Chat group, Media Service (presigned URL)	Gửi ảnh/file trên UI, hiển thị preview	R4: Group chat + Image/Doc
+8	Video + emoji + thông báo	Hardening bảo mật, rate limit	Video, emoji/sticker, push thông báo	UI video/emoji, thông báo	R5: Video + Emotion
+9	Thống kê	Hỗ trợ event từ User/Group	Phát event message.sent, media.uploaded	Statistics Service + dashboard (người dùng hoạt động, tin nhắn/ngày, nhóm sôi động, tỷ lệ loại media)	R6: Statistics
+10	Test và tối ưu	Load test (k6/JMeter), CI test, giám sát	Test unit/integration cho Chat	Test E2E, sửa lỗi UI	Bản ổn định
+11	Báo cáo	Tổng hợp, nộp LMS	Viết phần của mình	Viết phần của mình + video demo	Nộp báo cáo
+12	Chấm	Chuẩn bị demo trên cloud			
+
+Nguyên tắc làm việc: mỗi tuần một nhánh release/wN, Pull Request phải có review chéo, CI chạy build + test, và demo mỗi tuần để lưu bằng chứng release cho báo cáo.
+
+6. Ánh xạ sang nội dung báo cáo
+
+Phần “giải pháp đã học áp dụng cho đề tài” nên đi theo cấu trúc sau:
+
+Requirement và quality attributes: scalability, availability, performance (độ trễ tin nhắn), security, modifiability, testability, kèm tactic tương ứng.
+Kiểu kiến trúc: microservices, API Gateway, event-driven, CQRS (phần thống kê), layered trong từng service (Controller-Service-Repository).
+Design pattern: Observer/Pub-Sub (chat), Strategy (xử lý theo loại tin nhắn), Factory (tạo message), Adapter (storage), Circuit Breaker, Idempotent Consumer.
+Mô tả kiến trúc: C4 (Context, Container, Component), sequence diagram cho luồng gửi tin nhắn và upload media, deployment diagram.
+Dữ liệu: lý do chọn MySQL/MongoDB/Redis, chiến lược index và phân trang.
+Triển khai: Docker, CI/CD, môi trường cloud, release hàng tuần.
+Kiểm thử và đánh giá: kết quả load test, so sánh với quality attributes đã đặt ra.
+Phân công và nhật ký tuần: bảng nhiệm vụ, đóng góp từng thành viên.
+7. Gợi ý cắt giảm nếu thiếu thời gian
+
+Thứ tự ưu tiên khi cần cắt: (1) giữ trọn chat text + group + image, (2) video và document có thể chỉ upload và tải về, không cần streaming, (3) bỏ push notification, dùng realtime khi đang online, (4) bỏ Kafka, dùng RabbitMQ, (5) mobile chỉ làm nếu dư thời gian, ưu tiên web.
+
+Bạn muốn mình đưa phần này vào file Word/PDF, hoặc triển khai tiếp phần nào (sơ đồ C4, OpenAPI contract, cấu trúc repo và Docker Compose mẫu)?
+
+Cấu trúc code chi tiết (monorepo)
+
+Mình chọn monorepo + Maven multi-module cho backend (Spring Boot, Java 21) và React + TypeScript (Vite) cho web. Monorepo giúp 3 người dùng chung một CI, chia sẻ thư viện chung và dễ làm release theo tuần. Nếu nhóm quen Angular thì chỉ cần đổi thư mục frontend/web, phần còn lại giữ nguyên.
+
+1. Tầng gốc của repo
+zalolite/
+├── pom.xml                      # Parent POM: quản lý version dependency (BOM), danh sách module
+├── docker-compose.yml           # Chạy toàn bộ hệ thống (dev/demo)
+├── docker-compose.infra.yml     # Chỉ hạ tầng: MySQL, Mongo, Redis, RabbitMQ, MinIO
+├── docker-compose.prod.yml      # Override cho cloud
+├── .env.example                 # Mẫu biến môi trường (không commit .env thật)
+├── .gitignore
+├── .editorconfig
+├── Makefile                     # make up / down / build / test / seed
+├── README.md
+│
+├── .github/
+│   ├── workflows/
+│   │   ├── ci-backend.yml       # Build + test từng service (path filter)
+│   │   ├── ci-frontend.yml      # Lint + test + build web
+│   │   ├── cd-deploy.yml        # Build image, push registry, SSH deploy lên cloud
+│   │   └── release-weekly.yml   # Tạo tag/release vw1, vw2...
+│   ├── PULL_REQUEST_TEMPLATE.md
+│   ├── CODEOWNERS               # Ai review phần nào
+│   └── ISSUE_TEMPLATE/
+│
+├── libs/                        # Thư viện dùng chung (không phải service)
+├── services/                    # Các microservice
+├── frontend/                    # Web client (và mobile nếu dư thời gian)
+├── infra/                       # Cấu hình hạ tầng, monitoring, scripts deploy
+├── tests/                       # Test liên service: E2E, load
+└── docs/                        # Tài liệu và báo cáo
+2. libs/ — thư viện dùng chung
+libs/
+├── common-core/
+│   ├── pom.xml
+│   └── src/main/java/com/zalolite/common/core/
+│       ├── dto/
+│       │   ├── ApiResponse.java          # Format response thống nhất
+│       │   ├── PageResponse.java
+│       │   └── ErrorResponse.java
+│       ├── exception/
+│       │   ├── BusinessException.java
+│       │   ├── NotFoundException.java
+│       │   ├── ForbiddenException.java
+│       │   ├── ConflictException.java
+│       │   └── GlobalExceptionHandler.java   # @RestControllerAdvice
+│       ├── enums/
+│       │   ├── MessageType.java              # TEXT, IMAGE, VIDEO, DOCUMENT, EMOTION
+│       │   ├── ConversationType.java         # DIRECT, GROUP
+│       │   └── MessageStatus.java            # SENT, DELIVERED, SEEN
+│       ├── util/
+│       │   ├── IdGenerator.java              # ULID/Snowflake
+│       │   └── TimeUtils.java
+│       └── constants/Headers.java            # X-User-Id, X-Trace-Id
+│
+├── common-security/
+│   ├── pom.xml
+│   └── src/main/java/com/zalolite/common/security/
+│       ├── JwtTokenProvider.java             # Sinh và verify JWT
+│       ├── JwtAuthenticationFilter.java
+│       ├── CurrentUser.java                  # Annotation + resolver lấy userId
+│       ├── CurrentUserArgumentResolver.java
+│       └── SecurityAutoConfiguration.java
+│
+├── common-events/                            # Hợp đồng event giữa các service
+│   ├── pom.xml
+│   └── src/main/java/com/zalolite/common/events/
+│       ├── EventEnvelope.java                # eventId, type, occurredAt, traceId, payload
+│       ├── EventTypes.java
+│       ├── RoutingKeys.java                  # Hằng số exchange/routing key
+│       ├── user/
+│       │   ├── UserRegisteredEvent.java
+│       │   ├── UserLoggedInEvent.java
+│       │   └── FriendshipCreatedEvent.java
+│       ├── group/
+│       │   ├── GroupCreatedEvent.java
+│       │   ├── GroupMemberAddedEvent.java
+│       │   ├── GroupMemberRemovedEvent.java
+│       │   └── GroupDeletedEvent.java
+│       ├── chat/
+│       │   ├── MessageSentEvent.java
+│       │   ├── MessageSeenEvent.java
+│       │   └── ConversationCreatedEvent.java
+│       └── media/
+│           └── MediaUploadedEvent.java
+│
+└── common-observability/
+    ├── pom.xml
+    └── src/main/java/com/zalolite/common/observability/
+        ├── TraceIdFilter.java                # Gắn traceId vào MDC
+        ├── RequestLoggingFilter.java
+        └── MetricsConfig.java
+3. Mẫu cấu trúc chuẩn cho một service
+
+Mọi service dùng chung kiểu layered: controller → service → repository, cộng domain, dto, mapper, config, event. Cả nhóm giữ quy ước này để dễ đọc code của nhau và dễ viết trong báo cáo.
+
+services/<name>-service/
+├── pom.xml
+├── Dockerfile                    # Multi-stage build
+├── .dockerignore
+├── README.md                     # Cách chạy, port, biến môi trường, endpoint
+└── src/
+    ├── main/
+    │   ├── java/com/zalolite/<name>/
+    │   │   ├── <Name>Application.java
+    │   │   ├── config/           # Security, Rabbit, OpenAPI, Redis, Mongo...
+    │   │   ├── controller/       # REST controller (mỏng, chỉ validate và gọi service)
+    │   │   ├── service/          # Interface + impl chứa business logic
+    │   │   ├── repository/       # Spring Data JPA / Mongo
+    │   │   ├── domain/           # Entity / Document
+    │   │   ├── dto/              # request/ và response/
+    │   │   ├── mapper/           # MapStruct
+    │   │   ├── event/            # publisher/ và listener/
+    │   │   ├── client/           # Feign/WebClient gọi service khác (kèm Resilience4j)
+    │   │   └── exception/        # Exception riêng của service
+    │   └── resources/
+    │       ├── application.yml
+    │       ├── application-dev.yml
+    │       ├── application-prod.yml
+    │       └── db/migration/     # Flyway (với service dùng MySQL)
+    └── test/
+        ├── java/com/zalolite/<name>/
+        │   ├── controller/       # @WebMvcTest
+        │   ├── service/          # Unit test (Mockito)
+        │   ├── repository/       # Testcontainers
+        │   └── integration/      # @SpringBootTest + Testcontainers
+        └── resources/application-test.yml
+4. Chi tiết từng service
+4.1. api-gateway (người A, port 8080)
+services/api-gateway/
+├── pom.xml
+├── Dockerfile
+└── src/main/
+    ├── java/com/zalolite/gateway/
+    │   ├── GatewayApplication.java
+    │   ├── config/
+    │   │   ├── RouteConfig.java              # Route tới các service
+    │   │   ├── CorsConfig.java
+    │   │   ├── RateLimiterConfig.java        # Redis rate limiter
+    │   │   └── SwaggerAggregationConfig.java # Gom OpenAPI của các service
+    │   ├── filter/
+    │   │   ├── JwtAuthGlobalFilter.java      # Verify JWT, gắn X-User-Id
+    │   │   ├── TraceIdGlobalFilter.java
+    │   │   └── RequestLogGlobalFilter.java
+    │   └── fallback/
+    │       └── FallbackController.java       # Circuit breaker fallback
+    └── resources/
+        ├── application.yml
+        └── application-prod.yml
+
+Route gợi ý: /api/auth/**, /api/users/** → user-service, /api/groups/** → group-service, /api/chat/** → chat-service, /ws/** → chat-service (WebSocket), /api/media/** → media-service, /api/stats/** → statistics-service.
+
+4.2. user-service (người A, port 8081, MySQL)
+services/user-service/src/main/
+├── java/com/zalolite/user/
+│   ├── UserApplication.java
+│   ├── config/
+│   │   ├── SecurityConfig.java
+│   │   ├── RabbitConfig.java
+│   │   └── OpenApiConfig.java
+│   ├── controller/
+│   │   ├── AuthController.java          # register, login, refresh, logout
+│   │   ├── UserController.java          # profile, search, đổi avatar
+│   │   └── FriendController.java        # gửi/chấp nhận/từ chối lời mời, danh sách bạn
+│   ├── service/
+│   │   ├── AuthService.java / impl/AuthServiceImpl.java
+│   │   ├── UserService.java / impl/UserServiceImpl.java
+│   │   ├── FriendService.java / impl/FriendServiceImpl.java
+│   │   └── TokenService.java            # Sinh, lưu, thu hồi refresh token
+│   ├── repository/
+│   │   ├── UserRepository.java
+│   │   ├── FriendshipRepository.java
+│   │   └── RefreshTokenRepository.java
+│   ├── domain/
+│   │   ├── User.java
+│   │   ├── Friendship.java              # PENDING, ACCEPTED, BLOCKED
+│   │   ├── RefreshToken.java
+│   │   └── UserStatus.java
+│   ├── dto/
+│   │   ├── request/ RegisterRequest, LoginRequest, UpdateProfileRequest, FriendRequestDto
+│   │   └── response/ AuthResponse, UserProfileResponse, FriendResponse
+│   ├── mapper/UserMapper.java
+│   └── event/publisher/UserEventPublisher.java
+└── resources/
+    ├── application*.yml
+    └── db/migration/
+        ├── V1__create_users.sql
+        ├── V2__create_friendships.sql
+        └── V3__create_refresh_tokens.sql
+4.3. group-service (người A, port 8082, MySQL)
+services/group-service/src/main/
+├── java/com/zalolite/group/
+│   ├── GroupApplication.java
+│   ├── config/ (SecurityConfig, RabbitConfig, OpenApiConfig)
+│   ├── controller/
+│   │   ├── GroupController.java         # CRUD nhóm
+│   │   ├── GroupMemberController.java   # thêm/xóa thành viên, đổi vai trò, rời nhóm
+│   │   └── InternalGroupController.java # API nội bộ: kiểm tra "user X có thuộc nhóm Y?"
+│   ├── service/
+│   │   ├── GroupService.java
+│   │   ├── GroupMemberService.java
+│   │   └── GroupPermissionService.java  # Kiểm tra quyền OWNER/ADMIN/MEMBER
+│   ├── repository/ GroupRepository, GroupMemberRepository
+│   ├── domain/ Group, GroupMember, GroupRole (OWNER, ADMIN, MEMBER)
+│   ├── dto/{request,response}/
+│   ├── mapper/GroupMapper.java
+│   ├── client/UserClient.java           # Lấy thông tin user (Resilience4j)
+│   └── event/publisher/GroupEventPublisher.java
+└── resources/db/migration/
+    ├── V1__create_groups.sql
+    └── V2__create_group_members.sql
+4.4. chat-service (người B, port 8083, MongoDB + Redis + WebSocket)
+
+Đây là service phức tạp nhất, nên chia kỹ hơn.
+
+services/chat-service/src/main/
+├── java/com/zalolite/chat/
+│   ├── ChatApplication.java
+│   ├── config/
+│   │   ├── WebSocketConfig.java          # STOMP endpoint /ws, broker relay
+│   │   ├── WebSocketAuthInterceptor.java # Verify JWT lúc handshake
+│   │   ├── MongoConfig.java              # Index
+│   │   ├── RedisConfig.java
+│   │   ├── RabbitConfig.java
+│   │   └── OpenApiConfig.java
+│   │
+│   ├── controller/
+│   │   ├── ConversationController.java   # Danh sách hội thoại, tạo 1-1, mở group chat
+│   │   ├── MessageController.java        # Lịch sử tin nhắn (phân trang cursor), xóa/thu hồi
+│   │   └── PresenceController.java       # Online/offline của danh sách user
+│   │
+│   ├── websocket/
+│   │   ├── ChatWebSocketController.java  # @MessageMapping: /app/chat.send, /app/chat.typing, /app/chat.seen
+│   │   ├── WebSocketEventListener.java   # Connect/Disconnect → cập nhật presence
+│   │   ├── SessionRegistry.java
+│   │   └── dto/ WsMessage, TypingEvent, SeenEvent, AckEvent
+│   │
+│   ├── service/
+│   │   ├── ConversationService.java
+│   │   ├── MessageService.java           # Lưu, sinh seq, idempotent theo clientMsgId
+│   │   ├── MessageDeliveryService.java   # Đẩy tin tới người nhận (local hoặc qua Redis pub/sub)
+│   │   ├── ReadReceiptService.java       # delivered/seen
+│   │   ├── PresenceService.java          # Redis: online/last seen
+│   │   ├── SequenceService.java          # Redis INCR theo conversationId
+│   │   └── AuthorizationService.java     # Kiểm tra quyền vào hội thoại
+│   │
+│   ├── message/                          # Strategy + Factory cho từng loại tin
+│   │   ├── MessageHandler.java           # interface (Strategy)
+│   │   ├── TextMessageHandler.java
+│   │   ├── ImageMessageHandler.java
+│   │   ├── VideoMessageHandler.java
+│   │   ├── DocumentMessageHandler.java
+│   │   ├── EmotionMessageHandler.java
+│   │   └── MessageHandlerFactory.java    # Factory
+│   │
+│   ├── repository/
+│   │   ├── ConversationRepository.java
+│   │   ├── MessageRepository.java        # Truy vấn theo (conversationId, seq)
+│   │   └── MessageCustomRepository.java  # Cursor pagination
+│   │
+│   ├── domain/
+│   │   ├── Conversation.java             # id, type, memberIds, groupId, lastMessage
+│   │   ├── Message.java                  # id, conversationId, seq, clientMsgId, senderId, type, content, media, status
+│   │   ├── MediaAttachment.java          # mediaId, url, mime, size, thumbnail
+│   │   └── ReadState.java                # lastReadSeq theo user
+│   │
+│   ├── pubsub/
+│   │   ├── RedisMessagePublisher.java    # Publish để các instance khác đẩy xuống client
+│   │   └── RedisMessageSubscriber.java
+│   │
+│   ├── client/
+│   │   ├── GroupClient.java              # Lấy thành viên nhóm
+│   │   └── MediaClient.java              # Xác minh mediaId hợp lệ
+│   │
+│   ├── event/
+│   │   ├── publisher/ChatEventPublisher.java    # message.sent, message.seen
+│   │   └── listener/GroupEventListener.java     # Đồng bộ thành viên khi group thay đổi
+│   │
+│   └── dto/{request,response}/
+└── resources/application*.yml
+4.5. media-service (người B, port 8084, MinIO/S3 + MySQL hoặc Mongo cho metadata)
+services/media-service/src/main/
+├── java/com/zalolite/media/
+│   ├── MediaApplication.java
+│   ├── config/
+│   │   ├── StorageConfig.java            # MinIO/S3 client
+│   │   ├── UploadPolicyProperties.java   # Giới hạn size, mime cho từng loại
+│   │   ├── SecurityConfig.java
+│   │   └── RabbitConfig.java
+│   ├── controller/
+│   │   ├── MediaController.java          # xin presigned upload URL, confirm upload, lấy download URL
+│   │   └── InternalMediaController.java  # Chat service xác minh media
+│   ├── service/
+│   │   ├── MediaService.java
+│   │   ├── PresignedUrlService.java
+│   │   ├── UploadValidationService.java  # Kiểm tra mime/size
+│   │   └── ThumbnailService.java         # Ảnh: thumbnail; video: lấy frame đầu (ffmpeg, tùy chọn)
+│   ├── storage/                          # Adapter pattern
+│   │   ├── StorageProvider.java          # interface
+│   │   ├── MinioStorageProvider.java
+│   │   └── S3StorageProvider.java
+│   ├── repository/MediaRepository.java
+│   ├── domain/ Media, MediaKind (IMAGE, VIDEO, DOCUMENT), MediaStatus (PENDING, READY)
+│   ├── dto/{request,response}/
+│   └── event/publisher/MediaEventPublisher.java
+└── resources/db/migration/V1__create_media.sql
+4.6. statistics-service (người C, port 8085, MySQL)
+services/statistics-service/src/main/
+├── java/com/zalolite/stats/
+│   ├── StatisticsApplication.java
+│   ├── config/ (RabbitConfig, SecurityConfig, OpenApiConfig, SchedulerConfig)
+│   ├── listener/                         # Consumer các event
+│   │   ├── UserEventListener.java        # Người dùng mới, đăng nhập
+│   │   ├── GroupEventListener.java
+│   │   ├── ChatEventListener.java        # message.sent → tăng counter
+│   │   └── MediaEventListener.java
+│   ├── processor/
+│   │   ├── IdempotencyService.java       # Bảng processed_events, tránh xử lý trùng
+│   │   └── AggregationService.java       # Cộng dồn theo ngày/giờ
+│   ├── controller/
+│   │   ├── UserStatsController.java      # Thống kê theo người dùng
+│   │   ├── GroupStatsController.java     # Nhóm sôi động nhất
+│   │   ├── SystemStatsController.java    # Tổng quan hệ thống
+│   │   └── MediaStatsController.java     # Tỷ lệ loại media
+│   ├── service/
+│   │   ├── UserStatsService.java
+│   │   ├── GroupStatsService.java
+│   │   ├── SystemStatsService.java
+│   │   └── ExportService.java            # Xuất CSV (tùy chọn)
+│   ├── scheduler/DailyRollupJob.java     # Tổng hợp lại số liệu, dọn dữ liệu cũ
+│   ├── repository/
+│   ├── domain/
+│   │   ├── DailyUserActivity.java
+│   │   ├── HourlySystemStats.java
+│   │   ├── DailyGroupActivity.java
+│   │   ├── DailyMediaStats.java
+│   │   └── ProcessedEvent.java
+│   └── dto/{request,response}/
+└── resources/db/migration/
+    ├── V1__create_daily_user_activity.sql
+    ├── V2__create_system_stats.sql
+    ├── V3__create_group_activity.sql
+    ├── V4__create_media_stats.sql
+    └── V5__create_processed_events.sql
+5. frontend/web (người C)
+frontend/web/
+├── package.json
+├── vite.config.ts
+├── tsconfig.json
+├── .env.example                  # VITE_API_URL, VITE_WS_URL
+├── Dockerfile                    # Build rồi chạy bằng nginx
+├── nginx.conf
+├── public/
+└── src/
+    ├── main.tsx
+    ├── App.tsx
+    ├── routes/
+    │   ├── index.tsx
+    │   └── ProtectedRoute.tsx
+    │
+    ├── api/                       # Gọi REST, nên sinh từ OpenAPI
+    │   ├── httpClient.ts          # Axios + interceptor refresh token
+    │   ├── authApi.ts
+    │   ├── userApi.ts
+    │   ├── friendApi.ts
+    │   ├── groupApi.ts
+    │   ├── chatApi.ts
+    │   ├── mediaApi.ts
+    │   └── statsApi.ts
+    │
+    ├── realtime/
+    │   ├── stompClient.ts         # Kết nối, reconnect, subscribe
+    │   ├── useChatSocket.ts
+    │   └── usePresence.ts
+    │
+    ├── store/                     # Zustand hoặc Redux Toolkit
+    │   ├── authStore.ts
+    │   ├── chatStore.ts
+    │   ├── presenceStore.ts
+    │   └── notificationStore.ts
+    │
+    ├── features/
+    │   ├── auth/        (LoginPage, RegisterPage, hooks)
+    │   ├── profile/     (ProfilePage, EditProfileForm, AvatarUploader)
+    │   ├── friends/     (FriendList, FriendRequests, UserSearch)
+    │   ├── groups/      (GroupList, CreateGroupModal, GroupSettings, MemberList)
+    │   ├── chat/
+    │   │   ├── components/
+    │   │   │   ├── ConversationList.tsx
+    │   │   │   ├── ChatWindow.tsx
+    │   │   │   ├── MessageList.tsx        # Infinite scroll
+    │   │   │   ├── MessageBubble.tsx
+    │   │   │   ├── MessageInput.tsx
+    │   │   │   ├── TypingIndicator.tsx
+    │   │   │   ├── SeenIndicator.tsx
+    │   │   │   ├── EmojiPicker.tsx
+    │   │   │   ├── StickerPicker.tsx
+    │   │   │   └── attachments/ ImagePreview, VideoPlayer, FileCard, UploadProgress
+    │   │   ├── hooks/ useMessages, useSendMessage, useUpload
+    │   │   └── pages/ChatPage.tsx
+    │   └── stats/
+    │       ├── pages/DashboardPage.tsx
+    │       └── components/ ActiveUsersChart, MessagesPerDayChart, TopGroupsTable, MediaTypePie
+    │
+    ├── components/                # UI dùng chung
+    │   ├── Layout/ Sidebar, Header
+    │   ├── Avatar.tsx, Modal.tsx, Toast.tsx, Spinner.tsx
+    │
+    ├── hooks/
+    ├── types/                     # Kiểu dữ liệu (khớp OpenAPI)
+    ├── utils/
+    └── styles/
+
+Nếu dư thời gian cho mobile, thêm frontend/mobile-flutter/ với cấu trúc lib/{core,data,domain,presentation}.
+
+6. infra/
+infra/
+├── docker/
+│   ├── mysql/
+│   │   └── init/                  # Tạo database user_db, group_db, stats_db, media_db
+│   ├── mongo/init-mongo.js        # Tạo user và index
+│   ├── rabbitmq/
+│   │   ├── definitions.json       # Exchange, queue, binding
+│   │   └── rabbitmq.conf
+│   ├── redis/redis.conf
+│   ├── minio/create-buckets.sh
+│   └── nginx/
+│       ├── nginx.conf             # Reverse proxy, TLS, WebSocket upgrade
+│       └── conf.d/
+├── monitoring/
+│   ├── prometheus/prometheus.yml
+│   ├── grafana/
+│   │   ├── provisioning/{datasources,dashboards}/
+│   │   └── dashboards/ jvm.json, chat-latency.json, rabbitmq.json
+│   └── loki-promtail/             # Log tập trung (tùy chọn)
+├── scripts/
+│   ├── deploy.sh                  # SSH, pull image, compose up
+│   ├── backup-db.sh
+│   ├── seed-data.sh               # Tạo user/nhóm/tin nhắn mẫu cho demo
+│   └── wait-for-it.sh
+├── cloud/
+│   ├── README.md                  # Hướng dẫn dựng VM, mở port, domain, TLS (Let's Encrypt)
+│   └── terraform/                 # Tùy chọn
+└── k8s/                           # Chỉ làm manifest mẫu cho phần "hướng mở rộng"
+    ├── namespace.yaml
+    └── <service>/{deployment,service,hpa}.yaml
+7. tests/ và docs/
+tests/
+├── e2e/                           # Playwright hoặc Cypress
+│   ├── auth.spec.ts
+│   ├── friend-and-group.spec.ts
+│   ├── chat-1to1.spec.ts
+│   ├── chat-group.spec.ts
+│   ├── media-upload.spec.ts
+│   └── stats-dashboard.spec.ts
+├── load/                          # k6
+│   ├── login.js
+│   ├── send-message.js
+│   └── websocket-connections.js
+└── postman/ ZaloLite.postman_collection.json
+
+docs/
+├── 01-requirements/
+│   ├── use-cases.md
+│   ├── user-stories.md
+│   ├── non-functional-requirements.md     # Quality attribute scenarios
+│   └── wireframes/
+├── 02-architecture/
+│   ├── c4/ context.puml, container.puml, component-chat.puml, deployment.puml
+│   ├── sequences/ send-message.puml, upload-media.puml, login.puml, statistics-flow.puml
+│   ├── erd/ mysql-erd.png, mongo-schema.md
+│   ├── adr/
+│   │   ├── 0001-microservices.md
+│   │   ├── 0002-database-per-service.md
+│   │   ├── 0003-rabbitmq-event-driven.md
+│   │   ├── 0004-mongodb-for-messages.md
+│   │   ├── 0005-presigned-url-for-media.md
+│   │   ├── 0006-websocket-stomp-redis-pubsub.md
+│   │   ├── 0007-jwt-auth.md
+│   │   └── 0008-cqrs-for-statistics.md
+│   └── patterns-and-tactics.md            # Bảng ánh xạ QA → tactic → vị trí trong code
+├── 03-api/
+│   ├── openapi/ user.yaml, group.yaml, chat.yaml, media.yaml, stats.yaml
+│   ├── websocket-protocol.md              # Destination, payload, ack
+│   └── event-catalog.md                   # Danh sách event, schema, producer/consumer
+├── 04-testing/ test-plan.md, load-test-report.md
+├── 05-deployment/ deploy-guide.md, release-notes/ week-04.md ... week-09.md
+├── 06-report/
+│   ├── report.docx                        # Báo cáo nộp LMS
+│   ├── slides/
+│   └── team/ task-assignment.md, weekly-log.md
+└── diagrams-src/
+8. Quy ước chung
+Hạng mục	Quy ước
+Package Java	com.zalolite.<service>.<layer>
+Port	gateway 8080, user 8081, group 8082, chat 8083, media 8084, stats 8085
+Header nội bộ	Gateway verify JWT rồi gắn X-User-Id, service nội bộ tin header này
+API prefix	/api/<domain>/..., API nội bộ dùng /internal/... (không expose ra gateway)
+Branch	main (ổn định), develop, feature/<service>-<mô tả>, release/wN
+Commit	Conventional Commits: feat(chat): add seen receipt
+Exchange RabbitMQ	zalolite.events (topic), routing key dạng user.registered, message.sent
+Queue	<consumer>.<event>, ví dụ stats.message.sent
+Database	user_db, group_db, media_db, stats_db (MySQL), chat_db (Mongo)
+9. Thứ tự tạo code theo tuần
+Tuần 3 (A): pom.xml gốc, libs/*, docker-compose.infra.yml, khung từng service chỉ có Application và /actuator/health, CI. Khi đó mọi người clone về là chạy được.
+Tuần 4: user-service, api-gateway, màn hình auth ở frontend.
+Tuần 5: group-service, friends và groups ở frontend, WebSocket handshake ở chat-service.
+Tuần 6-8: chat-service đầy đủ, media-service, các component trong features/chat.
+Tuần 9: statistics-service, features/stats.
+Tuần 10: tests/, infra/monitoring.
+
+Phân chia quyền sở hữu thư mục: A giữ libs/, api-gateway, user-service, group-service, infra/, .github/. B giữ chat-service, media-service. C giữ statistics-service, frontend/, tests/. Tài liệu docs/ ai làm phần nào thì viết phần đó. Có thể ghi sẵn điều này vào CODEOWNERS.
+
+yêu cần quan trong nhất Các file code phải áp dụng nguyên tắt SOLID về dev code( không có ngoại lệ).
+
