@@ -31,18 +31,35 @@ export function AuthPage() {
   }
 
   return (
-    <main>
-      <h1>{register ? "Đăng ký" : "Đăng nhập"}</h1>
-      <form onSubmit={submit}>
-        {register && <input aria-label="Tên hiển thị" value={displayName} onChange={event => setDisplayName(event.target.value)} required />}
-        <input aria-label="Email" type="email" value={email} onChange={event => setEmail(event.target.value)} required />
-        <input aria-label="Mật khẩu" type="password" value={password} onChange={event => setPassword(event.target.value)} minLength={8} required />
-        <button type="submit">{register ? "Tạo tài khoản" : "Đăng nhập"}</button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-      <button type="button" onClick={() => setRegister(value => !value)}>
-        {register ? "Đã có tài khoản?" : "Tạo tài khoản mới"}
-      </button>
+    <main className="auth-shell">
+      <section className="auth-art">
+        <div className="brand-mark">Z</div>
+        <div>
+          <h1>ZaloLite</h1>
+          <p>Kết nối mọi cuộc trò chuyện của bạn.</p>
+        </div>
+        <div className="auth-bubbles" aria-hidden="true">
+          <span>Xin chào! 👋</span>
+          <span>Hôm nay bạn thế nào?</span>
+        </div>
+      </section>
+      <section className="auth-card">
+        <div className="auth-card-header">
+          <span className="eyebrow">CHÀO MỪNG</span>
+          <h2>{register ? "Tạo tài khoản mới" : "Đăng nhập"}</h2>
+          <p>{register ? "Chỉ vài bước để bắt đầu kết nối." : "Đăng nhập để tiếp tục cuộc trò chuyện."}</p>
+        </div>
+        <form className="auth-form" onSubmit={submit}>
+          {register && <label>Tên hiển thị<input aria-label="Tên hiển thị" value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="Nguyễn Văn An" required /></label>}
+          <label>Email<input aria-label="Email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="ban@example.com" required /></label>
+          <label>Mật khẩu<input aria-label="Mật khẩu" type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Tối thiểu 8 ký tự" minLength={8} required /></label>
+          <button className="primary-button" type="submit">{register ? "Tạo tài khoản" : "Đăng nhập"}</button>
+        </form>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="text-button" type="button" onClick={() => setRegister(value => !value)}>
+          {register ? "Đã có tài khoản? Đăng nhập" : "Chưa có tài khoản? Tạo tài khoản mới"}
+        </button>
+      </section>
     </main>
   );
 }

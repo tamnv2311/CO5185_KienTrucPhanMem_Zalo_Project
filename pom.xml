@@ -20,11 +20,14 @@
         <module>services/user-service</module>
         <module>services/group-service</module>
         <module>services/chat-service</module>
+        <module>services/statistics-service</module>
     </modules>
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
         <spring-cloud.version>2024.0.1</spring-cloud.version>
         <jjwt.version>0.12.6</jjwt.version>
+        <mockito.version>5.18.0</mockito.version>
+        <byte-buddy.version>1.17.8</byte-buddy.version>
     </properties>
     <dependencyManagement>
         <dependencies>

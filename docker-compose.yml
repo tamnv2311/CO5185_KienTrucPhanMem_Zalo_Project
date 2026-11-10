@@ -11,6 +11,15 @@ services:
       MYSQL_ROOT_PASSWORD: zalolite
       MYSQL_DATABASE: group_db
     volumes: ["zalolite_group_mysql:/var/lib/mysql"]
+  mysql-stats:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: zalolite
+      MYSQL_DATABASE: stats_db
+    volumes: ["zalolite_stats_mysql:/var/lib/mysql"]
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["5672:5672", "15672:15672"]
   mongo:
     image: mongo:7
   redis:
@@ -18,7 +27,20 @@ services:
   gateway:
     build: services/api-gateway
     ports: ["8080:8080"]
-    depends_on: [user-service, group-service, chat-service]
+    environment:
+      SPRING_CLOUD_GATEWAY_ROUTES_0_URI: http://statistics-service:8085
+      SPRING_CLOUD_GATEWAY_ROUTES_0_ID: statistics-service
+      SPRING_CLOUD_GATEWAY_ROUTES_0_PREDICATES_0: Path=/api/stats/**
+      SPRING_CLOUD_GATEWAY_ROUTES_1_URI: http://user-service:8081
+      SPRING_CLOUD_GATEWAY_ROUTES_1_ID: user-service
+      SPRING_CLOUD_GATEWAY_ROUTES_1_PREDICATES_0: Path=/api/auth/**,/api/users/**
+      SPRING_CLOUD_GATEWAY_ROUTES_2_URI: http://group-service:8082
+      SPRING_CLOUD_GATEWAY_ROUTES_2_ID: group-service
+      SPRING_CLOUD_GATEWAY_ROUTES_2_PREDICATES_0: Path=/api/groups/**,/api/friends/**
+      SPRING_CLOUD_GATEWAY_ROUTES_3_URI: http://chat-service:8083
+      SPRING_CLOUD_GATEWAY_ROUTES_3_ID: chat-service
+      SPRING_CLOUD_GATEWAY_ROUTES_3_PREDICATES_0: Path=/api/chat/**,/ws/**
+    depends_on: [user-service, group-service, chat-service, statistics-service]
   user-service:
     build: services/user-service
     environment:
@@ -43,6 +65,16 @@ services:
       GROUP_SERVICE_URL: http://group-service:8082
       JWT_SECRET: zalolite-development-secret-at-least-32-bytes-long
     depends_on: [mongo, redis, group-service]
+  statistics-service:
+    build: services/statistics-service
+    ports: ["8085:8085"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql-stats:3306/stats_db
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: zalolite
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      SPRING_RABBITMQ_HOST: rabbitmq
+    depends_on: [mysql-stats, rabbitmq]
   frontend:
     build: frontend
     ports: ["80:80"]
@@ -50,3 +82,4 @@ services:
 volumes:
   zalolite_user_mysql:
   zalolite_group_mysql:
+  zalolite_stats_mysql:

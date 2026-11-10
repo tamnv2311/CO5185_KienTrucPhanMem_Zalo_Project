@@ -5,6 +5,8 @@ import { AuthPage } from "./features/auth/AuthPage";
 import { ChatPage } from "./features/chat/ChatPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
 import { GroupPage } from "./features/groups/GroupPage";
+import { DashboardPage } from "./features/stats/DashboardPage";
+import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -15,6 +17,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/groups" element={<GroupPage />} />
+        <Route path="/stats" element={<DashboardPage />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,

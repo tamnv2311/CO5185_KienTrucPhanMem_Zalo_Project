@@ -105,7 +105,7 @@ Bạn muốn mình đưa phần này vào file Word/PDF, hoặc triển khai ti�
 
 Cấu trúc code chi tiết (monorepo)
 
-Mình chọn monorepo + Maven multi-module cho backend (Spring Boot, Java 21) và React + TypeScript (Vite) cho web. Monorepo giúp 3 người dùng chung một CI, chia sẻ thư viện chung và dễ làm release theo tuần. Nếu nhóm quen Angular thì chỉ cần đổi thư mục frontend/web, phần còn lại giữ nguyên.
+Mình chọn monorepo + Maven multi-module cho backend (Spring Boot, Java 25) và React + TypeScript (Vite) cho web. Monorepo giúp 3 người dùng chung một CI, chia sẻ thư viện chung và dễ làm release theo tuần. Nếu nhóm quen Angular thì chỉ cần đổi thư mục frontend/web, phần còn lại giữ nguyên.
 
 1. Tầng gốc của repo
 zalolite/
@@ -618,4 +618,3 @@ Tuần 10: tests/, infra/monitoring.
 Phân chia quyền sở hữu thư mục: A giữ libs/, api-gateway, user-service, group-service, infra/, .github/. B giữ chat-service, media-service. C giữ statistics-service, frontend/, tests/. Tài liệu docs/ ai làm phần nào thì viết phần đó. Có thể ghi sẵn điều này vào CODEOWNERS.
 
 yêu cần quan trong nhất Các file code phải áp dụng nguyên tắt SOLID về dev code( không có ngoại lệ).
-

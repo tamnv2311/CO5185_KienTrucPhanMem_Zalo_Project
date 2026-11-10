@@ -6,12 +6,19 @@ spring:
   cloud:
     gateway:
       routes:
+        - id: statistics-service
+          uri: http://localhost:8085
+          predicates:
+            - Path=/api/stats/**
         - id: user-service
-          uri: http://user-service:8081
-          predicates: [Path=/api/auth/**,/api/users/**]
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/auth/**,/api/users/**
         - id: group-service
-          uri: http://group-service:8082
-          predicates: [Path=/api/groups/**,/api/friends/**]
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/groups/**,/api/friends/**
         - id: chat-service
-          uri: http://chat-service:8083
-          predicates: [Path=/api/chat/**,/ws/**]
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/chat/**,/ws/**
