@@ -1,85 +1,161 @@
+# ZaloLite – whole system for development and demo.
+# Build the jars first (mvn clean verify), then: docker compose up -d --build
+#
+# Only two ports are published: 80 (web client) and 8080 (API gateway).
+# The services talk to each other on the internal network and are not reachable from outside,
+# which is why they can trust the X-User-Id header set by the gateway.
+
+x-java: &java
+  restart: on-failure
+  environment: &java-env
+    JAVA_TOOL_OPTIONS: "-Xms64m -Xmx384m"
+    # Development secret. Override JWT_SECRET (>= 32 bytes) in a .env file for any real deployment.
+    JWT_SECRET: ${JWT_SECRET:-zalolite-development-secret-at-least-32-bytes-long}
+    SPRING_RABBITMQ_HOST: rabbitmq
+
+x-mysql: &mysql
+  image: mysql:8.4
+  restart: on-failure
+  healthcheck:
+    test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+    start_period: 20s
+
 services:
+  # ---------- infrastructure (database per service) ----------
   mysql-user:
-    image: mysql:8.4
+    <<: *mysql
     environment:
       MYSQL_ROOT_PASSWORD: zalolite
       MYSQL_DATABASE: user_db
     volumes: ["zalolite_user_mysql:/var/lib/mysql"]
   mysql-group:
-    image: mysql:8.4
+    <<: *mysql
     environment:
       MYSQL_ROOT_PASSWORD: zalolite
       MYSQL_DATABASE: group_db
     volumes: ["zalolite_group_mysql:/var/lib/mysql"]
   mysql-stats:
-    image: mysql:8.4
+    <<: *mysql
     environment:
       MYSQL_ROOT_PASSWORD: zalolite
       MYSQL_DATABASE: stats_db
     volumes: ["zalolite_stats_mysql:/var/lib/mysql"]
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    ports: ["5672:5672", "15672:15672"]
   mongo:
     image: mongo:7
+    restart: on-failure
+    volumes: ["zalolite_mongo:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
   redis:
     image: redis:7-alpine
-  gateway:
-    build: services/api-gateway
-    ports: ["8080:8080"]
-    environment:
-      SPRING_CLOUD_GATEWAY_ROUTES_0_URI: http://statistics-service:8085
-      SPRING_CLOUD_GATEWAY_ROUTES_0_ID: statistics-service
-      SPRING_CLOUD_GATEWAY_ROUTES_0_PREDICATES_0: Path=/api/stats/**
-      SPRING_CLOUD_GATEWAY_ROUTES_1_URI: http://user-service:8081
-      SPRING_CLOUD_GATEWAY_ROUTES_1_ID: user-service
-      SPRING_CLOUD_GATEWAY_ROUTES_1_PREDICATES_0: Path=/api/auth/**,/api/users/**
-      SPRING_CLOUD_GATEWAY_ROUTES_2_URI: http://group-service:8082
-      SPRING_CLOUD_GATEWAY_ROUTES_2_ID: group-service
-      SPRING_CLOUD_GATEWAY_ROUTES_2_PREDICATES_0: Path=/api/groups/**,/api/friends/**
-      SPRING_CLOUD_GATEWAY_ROUTES_3_URI: http://chat-service:8083
-      SPRING_CLOUD_GATEWAY_ROUTES_3_ID: chat-service
-      SPRING_CLOUD_GATEWAY_ROUTES_3_PREDICATES_0: Path=/api/chat/**,/ws/**
-    depends_on: [user-service, group-service, chat-service, statistics-service]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: on-failure
+    ports: ["15672:15672"]   # management UI (guest/guest), handy to show the event flow in a demo
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  # ---------- services ----------
   user-service:
+    <<: *java
     build: services/user-service
     environment:
+      <<: *java-env
       SPRING_PROFILES_ACTIVE: mysql
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql-user:3306/user_db
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: zalolite
-      JWT_SECRET: zalolite-development-secret-at-least-32-bytes-long
-    depends_on: [mysql-user]
+      # The web client does not refresh tokens yet, so the demo uses a long-lived access token.
+      JWT_ACCESS_TTL_MINUTES: ${JWT_ACCESS_TTL_MINUTES:-720}
+    depends_on:
+      mysql-user: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
   group-service:
+    <<: *java
     build: services/group-service
     environment:
+      <<: *java-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql-group:3306/group_db
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: zalolite
-    depends_on: [mysql-group]
+      USER_SERVICE_URL: http://user-service:8081
+    depends_on:
+      mysql-group: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
   chat-service:
+    <<: *java
     build: services/chat-service
     environment:
+      <<: *java-env
       SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/chat_db
       SPRING_DATA_REDIS_HOST: redis
       GROUP_SERVICE_URL: http://group-service:8082
-      JWT_SECRET: zalolite-development-secret-at-least-32-bytes-long
-    depends_on: [mongo, redis, group-service]
-  statistics-service:
-    build: services/statistics-service
-    ports: ["8085:8085"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  media-service:
+    <<: *java
+    build: services/media-service
     environment:
+      <<: *java-env
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/media_db
+      MEDIA_STORAGE_DIR: /data/media
+    volumes: ["zalolite_media:/data/media"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  statistics-service:
+    <<: *java
+    build: services/statistics-service
+    environment:
+      <<: *java-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql-stats:3306/stats_db
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: zalolite
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
-      SPRING_RABBITMQ_HOST: rabbitmq
-    depends_on: [mysql-stats, rabbitmq]
+    depends_on:
+      mysql-stats: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  gateway:
+    <<: *java
+    build: services/api-gateway
+    ports: ["8080:8080"]
+    environment:
+      <<: *java-env
+      USER_SERVICE_URL: http://user-service:8081
+      GROUP_SERVICE_URL: http://group-service:8082
+      CHAT_SERVICE_URL: http://chat-service:8083
+      MEDIA_SERVICE_URL: http://media-service:8084
+      STATISTICS_SERVICE_URL: http://statistics-service:8085
+    depends_on: [user-service, group-service, chat-service, media-service, statistics-service]
+
+  # ---------- web client ----------
   frontend:
     build: frontend
+    restart: on-failure
     ports: ["80:80"]
     depends_on: [gateway]
+
 volumes:
   zalolite_user_mysql:
   zalolite_group_mysql:
   zalolite_stats_mysql:
+  zalolite_mongo:
+  zalolite_media:

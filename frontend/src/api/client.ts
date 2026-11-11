@@ -1,3 +1,5 @@
+import { adoptSharedTokens, readSession, updateTokens } from "./session";
+
 export interface ApiEnvelope<T> {
   success: boolean;
   data: T;
@@ -16,24 +18,45 @@ export class ApiError extends Error {
 }
 
 const BASE = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ?? "/api";
-const TIMEOUT_MS = 6000;
+const TIMEOUT_MS = 8000;
+const UPLOAD_TIMEOUT_MS = 120000;
 
-function readToken(): string | null {
-  try {
-    return localStorage.getItem("accessToken");
-  } catch {
-    return null;
-  }
+export function accessToken(): string | null {
+  return readSession()?.accessToken ?? null;
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+let refreshing: Promise<boolean> | undefined;
+
+/** Exchanges the refresh token for a new pair. Concurrent callers share one request. */
+function refreshTokens(): Promise<boolean> {
+  refreshing ??= (async () => {
+    if (adoptSharedTokens()) return true;
+    const refreshToken = readSession()?.refreshToken;
+    if (!refreshToken) return false;
+    try {
+      const response = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken }),
+      });
+      if (!response.ok) return false;
+      const data = (await response.json()).data as { accessToken: string; refreshToken: string };
+      updateTokens(data.accessToken, data.refreshToken);
+      return true;
+    } catch {
+      return false;
+    }
+  })().finally(() => { refreshing = undefined; });
+  return refreshing;
+}
+
+export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const headers = new Headers(init.headers);
-  if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const token = readToken();
+  const upload = init.body instanceof FormData;
+  if (!upload) headers.set("Content-Type", "application/json");
+  const token = accessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), upload ? UPLOAD_TIMEOUT_MS : TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(`${BASE}${path}`, { ...init, headers, signal: controller.signal });
@@ -41,6 +64,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError("Không kết nối được máy chủ", 0);
   } finally {
     clearTimeout(timer);
+  }
+
+  // An expired access token is renewed once, transparently.
+  if (response.status === 401 && token && !retried && !path.startsWith("/auth/")) {
+    if (await refreshTokens()) return api<T>(path, init, true);
+    window.dispatchEvent(new Event("zalolite:unauthorized"));
   }
 
   const text = await response.text();

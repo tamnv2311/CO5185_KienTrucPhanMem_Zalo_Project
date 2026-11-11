@@ -9,10 +9,12 @@ export function ChatPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
   const conversation = useApp(s => (conversationId ? s.db.conversations[conversationId] : undefined));
+  const syncing = useApp(s => s.syncing);
 
   useEffect(() => {
-    if (conversationId && !conversation) navigate("/chat", { replace: true });
-  }, [conversationId, conversation, navigate]);
+    // After a reload the conversations are still on their way from the backend: wait before giving up.
+    if (conversationId && !conversation && !syncing) navigate("/chat", { replace: true });
+  }, [conversationId, conversation, syncing, navigate]);
 
   return (
     <div className={`chat-page ${conversation ? "has-active" : ""}`}>

@@ -7,4 +7,6 @@ import java.util.Optional;
 
 public interface StatsRepositories extends JpaRepository<DailySystemStats, Long> {
     Optional<DailySystemStats> findByDate(LocalDate date);
+
+    java.util.List<DailySystemStats> findByDateGreaterThanEqualOrderByDateAsc(LocalDate from);
 }

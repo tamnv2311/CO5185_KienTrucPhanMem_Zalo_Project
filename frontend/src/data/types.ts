@@ -112,7 +112,10 @@ export interface Settings {
 }
 
 export interface Session {
+  /** Key of the local cache (the login e-mail). */
   userId: string;
+  /** Id of the account on the backend (live mode). */
+  remoteUserId?: string;
   mode: "live" | "demo";
   accessToken?: string;
   refreshToken?: string;

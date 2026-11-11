@@ -1,42 +1,92 @@
 package com.zalolite.chat.config;
 
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
-import org.springframework.beans.factory.annotation.Value;
+import com.zalolite.chat.service.ConversationService;
+import com.zalolite.common.core.BusinessException;
+import com.zalolite.common.security.JwtService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 
+/**
+ * Security of the WebSocket channel:
+ * CONNECT must carry a valid access token, and SUBSCRIBE is only allowed on the user's own
+ * topic and on conversations the user belongs to.
+ */
 @Component
 public class WebSocketAuthInterceptor implements ChannelInterceptor {
-    private final SecretKey key;
+    private static final String CONVERSATIONS = "/topic/conversations/";
+    private static final String USERS = "/topic/users/";
 
-    public WebSocketAuthInterceptor(@Value("${jwt.secret}") String secret) {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    private final JwtService jwt;
+    private final ConversationService conversations;
+
+    // @Lazy breaks the cycle: broker config -> interceptor -> services -> messaging template.
+    public WebSocketAuthInterceptor(JwtService jwt, @Lazy ConversationService conversations) {
+        this.jwt = jwt;
+        this.conversations = conversations;
     }
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-        if (accessor == null || !StompCommand.CONNECT.equals(accessor.getCommand())) {
+        if (accessor == null || accessor.getCommand() == null) {
             return message;
         }
-        String authorization = accessor.getFirstNativeHeader("Authorization");
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw new IllegalArgumentException("Authorization required for WebSocket");
+        if (StompCommand.CONNECT.equals(accessor.getCommand())) {
+            accessor.setUser(authenticate(accessor.getFirstNativeHeader("Authorization")));
+        } else if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            authorizeSubscription(accessor.getUser(), accessor.getDestination());
+        } else if (StompCommand.SEND.equals(accessor.getCommand()) && accessor.getUser() == null) {
+            throw new MessagingException("Chưa đăng nhập");
         }
-        Claims claims = Jwts.parser().verifyWith(key).build()
-                .parseSignedClaims(authorization.substring(7)).getPayload();
-        accessor.setUser((Principal) () -> claims.getSubject());
         return message;
+    }
+
+    private Principal authenticate(String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            throw new MessagingException("Thiếu access token");
+        }
+        try {
+            String userId = jwt.accessUserId(authorization.substring(7));
+            return () -> userId;
+        } catch (RuntimeException invalid) {
+            throw new MessagingException("Access token không hợp lệ hoặc đã hết hạn");
+        }
+    }
+
+    private void authorizeSubscription(Principal user, String destination) {
+        if (user == null || destination == null) {
+            throw new MessagingException("Chưa đăng nhập");
+        }
+        if (destination.equals("/topic/presence")) {
+            return;
+        }
+        if (destination.startsWith(USERS)) {
+            if (!destination.substring(USERS.length()).equals(user.getName())) {
+                throw new MessagingException("Không được theo dõi kênh của người khác");
+            }
+            return;
+        }
+        if (destination.startsWith(CONVERSATIONS)) {
+            String conversationId = destination.substring(CONVERSATIONS.length());
+            if (conversationId.endsWith("/events")) {
+                conversationId = conversationId.substring(0, conversationId.length() - "/events".length());
+            }
+            try {
+                conversations.require(conversationId, user.getName());
+            } catch (BusinessException denied) {
+                throw new MessagingException(denied.getMessage());
+            }
+            return;
+        }
+        throw new MessagingException("Kênh không hợp lệ");
     }
 }

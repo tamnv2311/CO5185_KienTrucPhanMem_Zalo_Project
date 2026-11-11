@@ -24,21 +24,19 @@ public class GroupPermissionServiceImpl implements GroupPermissionService {
     @Override
     public void requireManage(String groupId, String userId) {
         if (!canManage(groupId, userId)) {
-            throw new BusinessException("Only owner or admin may perform this action");
+            throw BusinessException.forbidden("Chỉ trưởng nhóm hoặc phó nhóm mới được thực hiện thao tác này");
         }
     }
 
     @Override
     public void requireMember(String groupId, String userId) {
-        if (members.findByGroupIdAndUserId(groupId, userId).isEmpty()) {
-            throw new BusinessException("User is not a group member");
-        }
+        role(groupId, userId);
     }
 
     @Override
     public GroupRole role(String groupId, String userId) {
         return members.findByGroupIdAndUserId(groupId, userId)
                 .map(GroupMember::getRole)
-                .orElseThrow(() -> new BusinessException("User is not a group member"));
+                .orElseThrow(() -> BusinessException.forbidden("Bạn không phải thành viên của nhóm này"));
     }
 }

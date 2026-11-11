@@ -10,7 +10,6 @@ import { Composer, ComposerHandle } from "./Composer";
 import { CallModal, ForwardModal, ImageViewer, MemberPicker, PollModal } from "./ChatModals";
 import { InfoPanel } from "./InfoPanel";
 import { messagePreview, visibleMessages } from "./messageUtils";
-import { useChatSocket } from "./useChatSocket";
 import { openProfile } from "../../app/AppShell";
 
 const CLUSTER_GAP = 5 * 60_000;
@@ -49,8 +48,6 @@ export function ChatWindow({ conversation }: { conversation: Conversation }) {
   }, [cid]);
 
   useEffect(() => { if (messages.length) store.markRead(cid); }, [messages.length, cid]);
-
-  useChatSocket(conversation.remoteId, cid);
 
   // Keep the view pinned to the bottom when new messages arrive.
   useLayoutEffect(() => {

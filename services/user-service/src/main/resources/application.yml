@@ -1,12 +1,28 @@
 server:
   port: 8081
 spring:
+  application:
+    name: user-service
   datasource:
     url: jdbc:h2:mem:userdb;DB_CLOSE_DELAY=-1
     username: sa
     password:
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: update
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
 jwt:
-  secret: "zalolite-development-secret-at-least-32-bytes-long"
+  secret: ${JWT_SECRET:zalolite-development-secret-at-least-32-bytes-long}
+  access-ttl-minutes: ${JWT_ACCESS_TTL_MINUTES:60}
+  refresh-ttl-days: ${JWT_REFRESH_TTL_DAYS:7}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    rabbit:
+      enabled: false

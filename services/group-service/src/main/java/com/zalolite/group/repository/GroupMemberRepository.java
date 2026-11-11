@@ -8,5 +8,7 @@ import java.util.Optional;
 
 public interface GroupMemberRepository extends JpaRepository<GroupMember, Long> {
     Optional<GroupMember> findByGroupIdAndUserId(String groupId, String userId);
-    List<GroupMember> findByGroupId(String groupId);
+    List<GroupMember> findByGroupIdOrderByJoinedAtAsc(String groupId);
+    List<GroupMember> findByUserId(String userId);
+    int countByGroupId(String groupId);
 }

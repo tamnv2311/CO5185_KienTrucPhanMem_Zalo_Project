@@ -1,98 +1,146 @@
 package com.zalolite.user.service;
 
 import com.zalolite.common.core.BusinessException;
-import com.zalolite.user.domain.User;
-import com.zalolite.user.dto.request.LoginRequest;
-import com.zalolite.user.dto.request.RegisterRequest;
-import com.zalolite.user.dto.response.AuthResponse;
-import com.zalolite.user.dto.response.UserProfileResponse;
-import com.zalolite.user.repository.UserRepository;
-import com.zalolite.user.repository.RefreshTokenRepository;
+import com.zalolite.common.events.EventPublisher;
+import com.zalolite.common.events.Events;
 import com.zalolite.user.domain.RefreshToken;
+import com.zalolite.user.domain.User;
+import com.zalolite.user.dto.Requests;
+import com.zalolite.user.dto.Responses;
+import com.zalolite.user.repository.RefreshTokenRepository;
+import com.zalolite.user.repository.UserRepository;
 import com.zalolite.user.security.TokenProvider;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.UUID;
 import java.time.Instant;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class AuthServiceImpl implements AuthService {
+    private static final String BAD_CREDENTIALS = "Email/số điện thoại hoặc mật khẩu không đúng";
+    private static final String BAD_REFRESH = "Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại";
+
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final TokenProvider tokens;
     private final RefreshTokenRepository refreshTokens;
+    private final EventPublisher events;
 
     public AuthServiceImpl(UserRepository users, PasswordEncoder passwordEncoder, TokenProvider tokens,
-                           RefreshTokenRepository refreshTokens) {
+                           RefreshTokenRepository refreshTokens, EventPublisher events) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.tokens = tokens;
         this.refreshTokens = refreshTokens;
+        this.events = events;
     }
 
     @Override
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
+    public Responses.Auth register(Requests.Register request) {
         String email = request.email().trim().toLowerCase();
         if (users.existsByEmail(email)) {
-            throw new BusinessException("Email already registered");
+            throw BusinessException.conflict("Email đã được đăng ký");
+        }
+        String phone = Phones.normalize(request.phone());
+        if (phone != null && users.existsByPhone(phone)) {
+            throw BusinessException.conflict("Số điện thoại đã được đăng ký");
         }
         User user = new User();
         user.setId(UUID.randomUUID().toString());
         user.setEmail(email);
+        user.setPhone(phone);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setDisplayName(request.displayName().trim());
         users.save(user);
-        return tokens(user);
+        events.publish(Events.USER_REGISTERED, Map.of("userId", user.getId(), "displayName", user.getDisplayName()));
+        return issueTokens(user);
     }
 
     @Override
-    public AuthResponse login(LoginRequest request) {
-        User user = users.findByEmail(request.email().trim().toLowerCase())
-                .orElseThrow(() -> new BusinessException("Invalid email or password"));
+    @Transactional
+    public Responses.Auth login(Requests.Login request) {
+        String identifier = request.identifier();
+        if (identifier == null || identifier.isBlank()) {
+            throw new BusinessException(422, "Vui lòng nhập email hoặc số điện thoại");
+        }
+        Optional<User> found = identifier.contains("@")
+                ? users.findByEmail(identifier.trim().toLowerCase())
+                : users.findByPhone(Phones.normalize(identifier));
+        User user = found.orElseThrow(() -> BusinessException.unauthorized(BAD_CREDENTIALS));
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw new BusinessException("Invalid email or password");
+            throw BusinessException.unauthorized(BAD_CREDENTIALS);
         }
-        return tokens(user);
+        return issueTokens(user);
     }
 
+    /** Refresh token rotation: the presented token is revoked and a new pair is issued. */
     @Override
-    public AuthResponse refresh(String refreshToken) {
-        String tokenId = tokens.tokenId(refreshToken);
-        RefreshToken stored = refreshTokens.findByTokenIdAndRevokedFalse(tokenId)
-                .orElseThrow(() -> new BusinessException("Refresh token is invalid"));
+    @Transactional
+    public Responses.Auth refresh(String refreshToken) {
+        RefreshToken stored = findActive(refreshToken)
+                .orElseThrow(() -> BusinessException.unauthorized(BAD_REFRESH));
         if (stored.getExpiresAt().isBefore(Instant.now())) {
-            throw new BusinessException("Refresh token is expired");
+            throw BusinessException.unauthorized(BAD_REFRESH);
         }
-        String userId = tokens.userId(refreshToken);
-        User user = users.findById(userId)
-                .orElseThrow(() -> new BusinessException("Refresh token is invalid"));
-        return tokens(user);
+        User user = users.findById(stored.getUserId())
+                .orElseThrow(() -> BusinessException.unauthorized(BAD_REFRESH));
+        stored.setRevoked(true);
+        refreshTokens.save(stored);
+        return issueTokens(user);
     }
 
     @Override
     @Transactional
     public void logout(String refreshToken) {
-        String tokenId = tokens.tokenId(refreshToken);
-        refreshTokens.findById(tokenId).ifPresent(token -> {
+        findActive(refreshToken).ifPresent(token -> {
             token.setRevoked(true);
             refreshTokens.save(token);
         });
     }
 
-    private AuthResponse tokens(User user) {
-        UserProfileResponse profile = new UserProfileResponse(
-                user.getId(), user.getEmail(), user.getDisplayName(), user.getAvatar());
-        String refreshToken = tokens.createRefreshToken(user.getId());
-        if (tokens instanceof com.zalolite.user.security.JwtTokenProvider jwtTokens) {
-            RefreshToken stored = new RefreshToken();
-            stored.setTokenId(jwtTokens.tokenId(refreshToken));
-            stored.setUserId(user.getId());
-            stored.setExpiresAt(Instant.now().plusSeconds(7 * 24 * 60 * 60));
-            refreshTokens.save(stored);
+    @Override
+    @Transactional
+    public void changePassword(String userId, Requests.ChangePassword request) {
+        User user = users.findById(userId).orElseThrow(() -> BusinessException.notFound("Không tìm thấy người dùng"));
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw new BusinessException("Mật khẩu hiện tại không đúng");
         }
-        return new AuthResponse(tokens.createAccessToken(user.getId()), refreshToken, profile);
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        users.save(user);
+        // Sign out every other device.
+        for (RefreshToken token : refreshTokens.findByUserIdAndRevokedFalse(userId)) {
+            token.setRevoked(true);
+            refreshTokens.save(token);
+        }
+    }
+
+    private Optional<RefreshToken> findActive(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            if (!tokens.isRefreshToken(refreshToken)) {
+                return Optional.empty();
+            }
+            return refreshTokens.findByTokenIdAndRevokedFalse(tokens.tokenId(refreshToken));
+        } catch (RuntimeException invalidToken) {
+            return Optional.empty();
+        }
+    }
+
+    private Responses.Auth issueTokens(User user) {
+        String refreshToken = tokens.createRefreshToken(user.getId());
+        RefreshToken stored = new RefreshToken();
+        stored.setTokenId(tokens.tokenId(refreshToken));
+        stored.setUserId(user.getId());
+        stored.setExpiresAt(Instant.now().plus(tokens.refreshTtl()));
+        refreshTokens.save(stored);
+        return new Responses.Auth(tokens.createAccessToken(user.getId()), refreshToken,
+                tokens.accessTtl().toSeconds(), Responses.Profile.of(user));
     }
 }

@@ -1,0 +1,30 @@
+server:
+  port: 8084
+spring:
+  application:
+    name: media-service
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/media_db
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 105MB
+media:
+  # Local-disk adapter. Swap StorageProvider for MinIO/S3 without touching the rest of the service.
+  storage-dir: ${MEDIA_STORAGE_DIR:./data/media}
+  max-size-mb:
+    image: 10
+    video: 100
+    file: 50
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    rabbit:
+      enabled: false

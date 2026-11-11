@@ -14,9 +14,11 @@ export function AddFriendModal({ onClose, onOpenChat }: { onClose: () => void; o
   const [target, setTarget] = useState<User>();
   const [greeting, setGreeting] = useState(`Xin chào, mình là ${users[ME_ID]?.name}. Kết bạn với mình nhé!`);
 
-  function search(e: FormEvent) {
+  const live = useApp(s => s.session?.mode === "live");
+
+  async function search(e: FormEvent) {
     e.preventDefault();
-    setResults(store.searchUsers(query));
+    setResults(await store.findUsers(query));
   }
 
   const status = (u: User) => friendIds.includes(u.id) ? "friend" : requests.some(r => r.fromId === ME_ID && r.toId === u.id) ? "sent" : requests.some(r => r.toId === ME_ID && r.fromId === u.id) ? "incoming" : "none";
@@ -40,7 +42,9 @@ export function AddFriendModal({ onClose, onOpenChat }: { onClose: () => void; o
         <label className="search-field"><Icon name="phone" size={18} /><input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Số điện thoại, email hoặc tên" aria-label="Số điện thoại hoặc email" /></label>
         <button className="btn primary" type="submit" disabled={!query.trim()}>Tìm kiếm</button>
       </form>
-      <p className="hint">Thử: <code>0987 654 321</code>, <code>vy@zalolite.dev</code> hoặc <code>Ngân</code></p>
+      {live
+        ? <p className="hint">Nhập chính xác email hoặc số điện thoại, hoặc một phần tên hiển thị.</p>
+        : <p className="hint">Thử: <code>0987 654 321</code>, <code>vy@zalolite.dev</code> hoặc <code>Ngân</code></p>}
       {results && results.length === 0 && <p className="muted-text pad center">Không tìm thấy người dùng nào</p>}
       <div className="picker-list">
         {results?.map(u => {

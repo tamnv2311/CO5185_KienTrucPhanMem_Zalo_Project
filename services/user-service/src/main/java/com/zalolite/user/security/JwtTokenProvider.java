@@ -1,55 +1,63 @@
 package com.zalolite.user.security;
 
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
+import com.zalolite.common.security.JwtService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.util.Date;
-import java.util.UUID;
+import java.time.Duration;
 
 @Component
 public class JwtTokenProvider implements TokenProvider {
-    private final SecretKey key;
+    private final JwtService jwt;
+    private final Duration accessTtl;
+    private final Duration refreshTtl;
 
-    public JwtTokenProvider(@Value("${jwt.secret}") String secret) {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    @Autowired
+    public JwtTokenProvider(@Value("${jwt.secret}") String secret,
+                            @Value("${jwt.access-ttl-minutes:60}") long accessMinutes,
+                            @Value("${jwt.refresh-ttl-days:7}") long refreshDays) {
+        this.jwt = new JwtService(secret);
+        this.accessTtl = Duration.ofMinutes(accessMinutes);
+        this.refreshTtl = Duration.ofDays(refreshDays);
+    }
+
+    public JwtTokenProvider(String secret) {
+        this(secret, 60, 7);
     }
 
     @Override
     public String createAccessToken(String userId) {
-        return createToken(userId, 15 * 60);
+        return jwt.createAccessToken(userId, accessTtl);
     }
 
     @Override
     public String createRefreshToken(String userId) {
-        return createToken(userId, 7 * 24 * 60 * 60);
-    }
-
-    private String createToken(String userId, long ttlSeconds) {
-        Instant now = Instant.now();
-        return Jwts.builder()
-                .subject(userId)
-                .id(UUID.randomUUID().toString())
-                .issuedAt(Date.from(now))
-                .expiration(Date.from(now.plusSeconds(ttlSeconds)))
-                .signWith(key)
-                .compact();
+        return jwt.createRefreshToken(userId, refreshTtl);
     }
 
     @Override
     public String userId(String token) {
-        Claims claims = Jwts.parser().verifyWith(key).build()
-                .parseSignedClaims(token).getPayload();
-        return claims.getSubject();
+        return jwt.parse(token).getSubject();
     }
 
+    @Override
     public String tokenId(String token) {
-        return Jwts.parser().verifyWith(key).build()
-                .parseSignedClaims(token).getPayload().getId();
+        return jwt.parse(token).getId();
+    }
+
+    @Override
+    public boolean isRefreshToken(String token) {
+        return JwtService.REFRESH.equals(jwt.parse(token).get(JwtService.TYPE_CLAIM, String.class));
+    }
+
+    @Override
+    public Duration accessTtl() {
+        return accessTtl;
+    }
+
+    @Override
+    public Duration refreshTtl() {
+        return refreshTtl;
     }
 }

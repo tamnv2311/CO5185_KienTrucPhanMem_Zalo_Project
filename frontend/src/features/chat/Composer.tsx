@@ -187,7 +187,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ co
             value={text}
             placeholder={`Nhập @, tin nhắn tới ${title}`}
             aria-label="Nội dung tin nhắn"
-            onChange={e => updateText(e.target.value)}
+            onChange={e => { updateText(e.target.value); store.notifyTyping(cid); }}
             onKeyDown={onKeyDown}
             onPaste={e => {
               const files = Array.from(e.clipboardData.files);

@@ -1,6 +1,7 @@
 package com.zalolite.group.controller;
 
 import com.zalolite.common.core.ApiResponse;
+import com.zalolite.group.dto.GroupDtos;
 import com.zalolite.group.service.GroupService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -8,8 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-
+/** Service-to-service API. /internal/** is never routed by the gateway. */
 @RestController
 @RequestMapping("/internal/groups")
 public class InternalGroupController {
@@ -19,14 +19,18 @@ public class InternalGroupController {
         this.groups = groups;
     }
 
+    @GetMapping("/{groupId}")
+    public ApiResponse<GroupDtos.GroupInfo> info(@PathVariable String groupId) {
+        return ApiResponse.ok(groups.info(groupId));
+    }
+
     @GetMapping("/{groupId}/members")
-    public ApiResponse<List<String>> members(@PathVariable String groupId) {
+    public ApiResponse<java.util.List<String>> members(@PathVariable String groupId) {
         return ApiResponse.ok(groups.memberIds(groupId));
     }
 
     @GetMapping("/{groupId}/access")
-    public ApiResponse<Boolean> access(@PathVariable String groupId,
-                                       @RequestParam String userId) {
+    public ApiResponse<Boolean> access(@PathVariable String groupId, @RequestParam String userId) {
         return ApiResponse.ok(groups.canAccess(groupId, userId));
     }
 }

@@ -1,14 +1,31 @@
 server:
   port: 8083
 jwt:
-  secret: "zalolite-development-secret-at-least-32-bytes-long"
+  secret: ${JWT_SECRET:zalolite-development-secret-at-least-32-bytes-long}
 services:
   group-service:
     url: ${GROUP_SERVICE_URL:http://localhost:8082}
 spring:
+  application:
+    name: chat-service
   data:
     mongodb:
       uri: mongodb://localhost:27017/chat_db
     redis:
       host: localhost
       port: 6379
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    listener:
+      simple:
+        # A poisoned event must not be redelivered forever.
+        default-requeue-rejected: false
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    rabbit:
+      enabled: false
