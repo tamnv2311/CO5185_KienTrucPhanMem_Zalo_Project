@@ -38,6 +38,8 @@ export interface OutgoingMessage {
 }
 
 const dbKey = (userId: string) => `zalolite.db.v1.${userId}`;
+/** Local cache of a real account (settings, personal cloud notes). Kept apart from demo data on purpose. */
+const liveKey = (userId: string) => `zalolite.live.v1.${userId}`;
 
 function safeGet(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -83,7 +85,9 @@ class AppStore {
   });
 
   constructor() {
-    const session: Session | undefined = readSession();
+    let session: Session | undefined = readSession();
+    // Sample-data sessions are no longer offered; whoever was in one signs in for real.
+    if (session?.mode === "demo") { clearSession(); session = undefined; }
     const db = !session ? createSeed() : session.mode === "live" ? this.liveDb(session.userId) : this.loadDb(session.userId);
     this.state = { session, db, toasts: [], syncing: session?.mode === "live" };
     if (session?.mode === "live") void this.startLive();
@@ -115,7 +119,8 @@ class AppStore {
     const session = this.state.session;
     if (!session) return;
     clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => safeSet(dbKey(session.userId), JSON.stringify(persistable(this.state.db))), 400);
+    const key = session.mode === "live" ? liveKey(session.userId) : dbKey(session.userId);
+    this.saveTimer = setTimeout(() => safeSet(key, JSON.stringify(persistable(this.state.db))), 400);
   }
 
   private loadDb(userId: string): DbState {
@@ -132,7 +137,7 @@ class AppStore {
    */
   private liveDb(userId: string, profile: Partial<User> = {}): DbState {
     const seed = createSeed();
-    const raw = safeGet(dbKey(userId));
+    const raw = safeGet(liveKey(userId));
     let stored: DbState | undefined;
     try { stored = raw ? (JSON.parse(raw) as DbState) : undefined; } catch { stored = undefined; }
     const known = Object.fromEntries(Object.entries(profile).filter(([k, v]) => v && k !== "id"));
@@ -196,9 +201,9 @@ class AppStore {
       this.startSession({ userId: email.toLowerCase(), remoteUserId: result.user?.id, mode: "live", accessToken: result.accessToken, refreshToken: result.refreshToken }, { email, ...result.user });
       return "live";
     } catch (error) {
+      // No silent fallback to sample data: a real account must only ever show real data.
       if (error instanceof ApiError && error.unavailable) {
-        this.startSession({ userId: `demo:${email.toLowerCase()}`, mode: "demo" }, { email, name: email.split("@")[0] });
-        return "demo";
+        throw new ApiError("Không kết nối được máy chủ. Hãy kiểm tra backend đã chạy rồi thử lại.", error.status);
       }
       throw error;
     }
@@ -210,9 +215,9 @@ class AppStore {
       this.startSession({ userId: email.toLowerCase(), remoteUserId: result.user?.id, mode: "live", accessToken: result.accessToken, refreshToken: result.refreshToken }, { email, name: displayName, ...result.user });
       return "live";
     } catch (error) {
+      // No silent fallback to sample data: a real account must only ever show real data.
       if (error instanceof ApiError && error.unavailable) {
-        this.startSession({ userId: `demo:${email.toLowerCase()}`, mode: "demo" }, { email, name: displayName });
-        return "demo";
+        throw new ApiError("Không kết nối được máy chủ. Hãy kiểm tra backend đã chạy rồi thử lại.", error.status);
       }
       throw error;
     }
@@ -292,6 +297,26 @@ class AppStore {
       try { await liveApi.updateMe({ ...this.me, ...patch }); } catch (error) { this.toast(errorText(error), "error"); return; }
     }
     this.toast("Đã cập nhật thông tin", "success");
+  }
+
+  /** Changing the password signs every device out, so this one signs in again with the new password. */
+  async changePassword(current: string, next: string): Promise<boolean> {
+    try {
+      await liveApi.changePassword(current, next);
+      const session = readSession();
+      const email = this.me.email ?? session?.userId;
+      if (session && email) {
+        const fresh = await liveApi.login(email, next);
+        const renewed = { ...session, accessToken: fresh.accessToken, refreshToken: fresh.refreshToken };
+        writeSession(renewed);
+        this.set({ session: renewed });
+      }
+      this.toast("Đã đổi mật khẩu", "success");
+      return true;
+    } catch (error) {
+      this.toast(errorText(error), "error");
+      return false;
+    }
   }
 
   updateSettings(patch: Partial<Settings>) {

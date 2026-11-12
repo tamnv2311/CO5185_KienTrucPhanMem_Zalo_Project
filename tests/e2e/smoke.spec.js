@@ -205,7 +205,7 @@ async function main() {
   const groupId = group.data.id;
   const groupChat = await until("group conversation created from group.created event", async () => {
     const list = await call("GET", "/api/chat/conversations", { token: chi.token });
-    return list.data.find(c => c.id === groupId);
+    return list.data.find(c => c.id === groupId && c.lastMessage);
   });
   check(groupChat.type === "GROUP" && groupChat.name.startsWith("Nhóm E2E") && groupChat.lastMessage.type === "SYSTEM", "group conversation id equals group id and starts with a system message");
   const inGroup = await call("POST", "/api/chat/messages", { token: binh.token, body: { conversationId: groupId, clientMsgId: "g-1", content: "Chào cả nhóm" } });

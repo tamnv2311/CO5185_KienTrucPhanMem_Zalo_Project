@@ -1,0 +1,14 @@
+# Context of the root Dockerfile (backend build). The web client has its own context (frontend/).
+.git
+.github
+.vscode
+**/target
+**/node_modules
+frontend
+docs
+tests
+Requirement
+Claude outputs
+.env
+.env.*
+!.env.example

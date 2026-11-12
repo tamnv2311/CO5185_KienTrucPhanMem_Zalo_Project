@@ -1,0 +1,174 @@
+# ZaloLite on a cloud server (one Linux VM with Docker).
+#
+#   cp .env.example .env        # then fill in the secrets
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Differences from docker-compose.yml (development):
+#   - images are built inside Docker from source (no Java/Maven needed on the server)
+#   - every secret comes from .env; nothing has a default password
+#   - only the reverse proxy is published (80/443); with a domain it gets HTTPS automatically
+#   - one MySQL server holds the three service databases, to fit a small VM
+#     (each service still has its own schema and never reads another one)
+
+name: zalolite
+
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+x-java-env: &java-env
+  JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_MAX_HEAP:-256m}"
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+  SPRING_RABBITMQ_HOST: rabbitmq
+  SPRING_RABBITMQ_USERNAME: zalolite
+  SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+
+x-mysql-env: &mysql-env
+  SPRING_DATASOURCE_USERNAME: zalolite
+  SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+  SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+
+services:
+  # ---------- entry point ----------
+  proxy:
+    <<: *service
+    image: caddy:2-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      # ":80" = plain HTTP on the server's IP. A domain name (chat.example.com) turns on HTTPS.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [frontend]
+
+  frontend:
+    <<: *service
+    build: frontend
+    depends_on: [gateway]
+
+  # ---------- infrastructure (reachable only inside the Docker network) ----------
+  mysql:
+    <<: *service
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_USER: zalolite
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infra/mysql/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+  mongo:
+    <<: *service
+    image: mongo:7
+    volumes: ["mongo_data:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  redis:
+    <<: *service
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  rabbitmq:
+    <<: *service
+    image: rabbitmq:3.13-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: zalolite
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes: ["rabbitmq_data:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  # ---------- services ----------
+  user-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: user-service } }
+    environment:
+      <<: [*java-env, *mysql-env]
+      SPRING_PROFILES_ACTIVE: mysql
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/user_db
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  group-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: group-service } }
+    environment:
+      <<: [*java-env, *mysql-env]
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/group_db
+      USER_SERVICE_URL: http://user-service:8081
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  chat-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: chat-service } }
+    environment:
+      <<: *java-env
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/chat_db
+      SPRING_DATA_REDIS_HOST: redis
+      GROUP_SERVICE_URL: http://group-service:8082
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  media-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: media-service } }
+    environment:
+      <<: *java-env
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/media_db
+      MEDIA_STORAGE_DIR: /data/media
+    volumes: ["media_data:/data"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  statistics-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: statistics-service } }
+    environment:
+      <<: [*java-env, *mysql-env]
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/stats_db
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+  gateway:
+    <<: *service
+    build: { context: ., args: { SERVICE: api-gateway } }
+    environment:
+      <<: *java-env
+      USER_SERVICE_URL: http://user-service:8081
+      GROUP_SERVICE_URL: http://group-service:8082
+      CHAT_SERVICE_URL: http://chat-service:8083
+      MEDIA_SERVICE_URL: http://media-service:8084
+      STATISTICS_SERVICE_URL: http://statistics-service:8085
+    depends_on: [user-service, group-service, chat-service, media-service, statistics-service]
+
+volumes:
+  mysql_data:
+  mongo_data:
+  rabbitmq_data:
+  media_data:
+  caddy_data:
+  caddy_config:

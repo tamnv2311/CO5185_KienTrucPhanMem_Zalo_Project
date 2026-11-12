@@ -19,19 +19,13 @@ export function AuthPage() {
     setError("");
     setBusy(true);
     try {
-      const result = register ? await store.register(email, password, displayName) : await store.login(email, password);
-      if (result === "demo") store.toast("Không kết nối được backend – đang chạy chế độ Demo với dữ liệu mẫu");
+      if (register) await store.register(email, password, displayName); else await store.login(email, password);
       navigate("/chat", { replace: true });
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : "Đăng nhập thất bại");
     } finally {
       setBusy(false);
     }
-  }
-
-  function demo() {
-    store.demoLogin();
-    navigate("/chat", { replace: true });
   }
 
   return (
@@ -59,15 +53,13 @@ export function AuthPage() {
           </label>
           <label className="field-with-icon">
             <Icon name="lock" size={18} />
-            <input aria-label="Mật khẩu" type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Mật khẩu (tối thiểu 8 ký tự)" minLength={8} required autoComplete={register ? "new-password" : "current-password"} />
+            <input aria-label="Mật khẩu" type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Mật khẩu (tối thiểu 6 ký tự)" minLength={6} required autoComplete={register ? "new-password" : "current-password"} />
             <button type="button" className="link-btn" onClick={() => setShowPassword(v => !v)}>{showPassword ? "Ẩn" : "Hiện"}</button>
           </label>
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="btn primary block" type="submit" disabled={busy}>{busy ? "Đang xử lý…" : register ? "Tạo tài khoản" : "Đăng nhập với mật khẩu"}</button>
         </form>
-        <div className="auth-divider"><span>hoặc</span></div>
-        <button className="btn ghost block" type="button" onClick={demo}>Dùng thử với dữ liệu mẫu (Demo)</button>
-        <p className="auth-note">Nếu backend chưa chạy, ứng dụng tự chuyển sang chế độ Demo để bạn trải nghiệm đầy đủ tính năng.</p>
+        <p className="auth-note">{register ? "Tài khoản mới bắt đầu trống: hãy thêm bạn bằng email hoặc số điện thoại để trò chuyện." : "Chưa có tài khoản? Chọn “Tạo tài khoản” ở trên."}</p>
       </section>
       <footer className="auth-footer">CO5185 · Kiến trúc phần mềm · HK1 2026–2027</footer>
     </main>

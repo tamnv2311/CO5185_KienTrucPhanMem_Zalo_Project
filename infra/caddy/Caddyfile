@@ -1,0 +1,8 @@
+# Public entry point. SITE_ADDRESS comes from .env:
+#   :80               plain HTTP on any host name / IP
+#   chat.example.com  HTTPS with an automatic Let's Encrypt certificate (and HTTP -> HTTPS redirect)
+# The web container already forwards /api and /ws to the gateway, so everything goes to it.
+{$SITE_ADDRESS::80} {
+	encode gzip
+	reverse_proxy frontend:80
+}

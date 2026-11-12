@@ -44,6 +44,16 @@ node tests/e2e/smoke.spec.js
 
 Frontend development: `cd frontend`, `npm install`, `npm run dev`.
 
+## Deploy to a cloud server
+
+One Linux VM with Docker is enough (4 GB RAM or more). Secrets come from `.env`, images are built
+inside Docker and Caddy provides HTTPS. Step by step: [docs/deploy-cloud.md](docs/deploy-cloud.md).
+
+```bash
+cp .env.example .env   # fill in the secrets
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
 ## API overview
 
 All routes go through the gateway and need `Authorization: Bearer <accessToken>` except

@@ -65,14 +65,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </>}
           {tab === "account" && <>
             <h4>Kết nối máy chủ</h4>
-            <p className={`mode-pill ${session?.mode}`}>{session?.mode === "live" ? "Đang dùng API thật (API Gateway :8080)" : "Chế độ Demo – dữ liệu lưu trên trình duyệt"}</p>
+            <p className={`mode-pill ${session?.mode}`}>{session?.mode === "live" ? "Đã kết nối máy chủ ZaloLite" : "Chế độ Demo – dữ liệu lưu trên trình duyệt"}</p>
             <h4>Đổi mật khẩu</h4>
-            <form className="pw-form" onSubmit={e => {
+            <form className="pw-form" onSubmit={async e => {
               e.preventDefault();
-              if (pw.next.length < 8) { store.toast("Mật khẩu mới tối thiểu 8 ký tự", "error"); return; }
+              if (pw.next.length < 6) { store.toast("Mật khẩu mới tối thiểu 6 ký tự", "error"); return; }
               if (pw.next !== pw.confirm) { store.toast("Mật khẩu xác nhận không khớp", "error"); return; }
-              setPw({ current: "", next: "", confirm: "" });
-              store.toast(session?.mode === "live" ? "Backend chưa hỗ trợ đổi mật khẩu" : "Đã đổi mật khẩu (demo)", session?.mode === "live" ? "error" : "success");
+              if (await store.changePassword(pw.current, pw.next)) setPw({ current: "", next: "", confirm: "" });
             }}>
               <input type="password" placeholder="Mật khẩu hiện tại" value={pw.current} onChange={e => setPw({ ...pw, current: e.target.value })} aria-label="Mật khẩu hiện tại" required />
               <input type="password" placeholder="Mật khẩu mới" value={pw.next} onChange={e => setPw({ ...pw, next: e.target.value })} aria-label="Mật khẩu mới" required />
