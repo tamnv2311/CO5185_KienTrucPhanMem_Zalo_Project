@@ -3,4 +3,6 @@ node_modules/
 dist/
 .env
 data/
+!frontend/src/data/
+!frontend/src/data/live.ts
 *.tsbuildinfo
