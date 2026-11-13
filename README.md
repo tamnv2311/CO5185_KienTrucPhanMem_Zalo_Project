@@ -26,13 +26,13 @@ Web client ──► API gateway :8080 ──► user-service        :8081  MySQ
 
 ## Run
 
-```powershell
-mvn clean verify
-```
+Only Docker is needed; the backend is compiled inside Docker (the first build takes a few minutes).
 
 ```powershell
 docker compose up -d --build
 ```
+
+`mvn clean verify` is only for running the tests locally (Java 25).
 
 Web client: http://localhost · API gateway: http://localhost:8080 · RabbitMQ UI: http://localhost:15672
 

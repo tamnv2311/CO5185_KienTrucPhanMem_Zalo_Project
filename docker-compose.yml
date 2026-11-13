@@ -1,5 +1,6 @@
 # ZaloLite – whole system for development and demo.
-# Build the jars first (mvn clean verify), then: docker compose up -d --build
+# Needs only Docker: the backend is compiled inside Docker (root Dockerfile).
+#   docker compose up -d --build
 #
 # Only two ports are published: 80 (web client) and 8080 (API gateway).
 # The services talk to each other on the internal network and are not reachable from outside,
@@ -74,7 +75,7 @@ services:
   # ---------- services ----------
   user-service:
     <<: *java
-    build: services/user-service
+    build: { context: ., args: { SERVICE: user-service } }
     environment:
       <<: *java-env
       SPRING_PROFILES_ACTIVE: mysql
@@ -88,7 +89,7 @@ services:
       rabbitmq: { condition: service_healthy }
   group-service:
     <<: *java
-    build: services/group-service
+    build: { context: ., args: { SERVICE: group-service } }
     environment:
       <<: *java-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql-group:3306/group_db
@@ -100,7 +101,7 @@ services:
       rabbitmq: { condition: service_healthy }
   chat-service:
     <<: *java
-    build: services/chat-service
+    build: { context: ., args: { SERVICE: chat-service } }
     environment:
       <<: *java-env
       SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/chat_db
@@ -112,7 +113,7 @@ services:
       rabbitmq: { condition: service_healthy }
   media-service:
     <<: *java
-    build: services/media-service
+    build: { context: ., args: { SERVICE: media-service } }
     environment:
       <<: *java-env
       SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/media_db
@@ -123,7 +124,7 @@ services:
       rabbitmq: { condition: service_healthy }
   statistics-service:
     <<: *java
-    build: services/statistics-service
+    build: { context: ., args: { SERVICE: statistics-service } }
     environment:
       <<: *java-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql-stats:3306/stats_db
@@ -135,7 +136,7 @@ services:
       rabbitmq: { condition: service_healthy }
   gateway:
     <<: *java
-    build: services/api-gateway
+    build: { context: ., args: { SERVICE: api-gateway } }
     ports: ["8080:8080"]
     environment:
       <<: *java-env
