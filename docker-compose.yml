@@ -50,8 +50,8 @@ services:
     volumes: ["zalolite_mongo:/data/db"]
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 5s
-      timeout: 5s
+      interval: 15s
+      timeout: 30s   # mongosh alone needs several seconds to start on a slow VM
       retries: 20
   redis:
     image: redis:7-alpine
@@ -67,8 +67,8 @@ services:
     ports: ["15672:15672"]   # management UI (guest/guest), handy to show the event flow in a demo
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 10s
+      interval: 15s
+      timeout: 30s
       retries: 20
       start_period: 20s
 
