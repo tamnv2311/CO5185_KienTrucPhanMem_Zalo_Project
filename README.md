@@ -44,6 +44,22 @@ node tests/e2e/smoke.spec.js
 
 Frontend development: `cd frontend`, `npm install`, `npm run dev`.
 
+## Mobile app (Expo / React Native)
+
+`mobile/` is a phone client for the same backend: sign-in, conversations, real-time chat, images,
+friends and groups. It runs in the Expo Go app, so no Mac or developer account is needed.
+
+```powershell
+cd mobile
+npm install
+npx expo start
+```
+
+Scan the QR code with the phone camera (iPhone) or with Expo Go (Android). The phone and the
+computer must be on the same Wi-Fi; otherwise use `npx expo start --tunnel`. The server address
+defaults to the cloud deployment and can be changed on the sign-in screen or with
+`EXPO_PUBLIC_SERVER_URL` in `mobile/.env`.
+
 ## Deploy to a cloud server
 
 One Linux VM with Docker is enough (4 GB RAM or more). Secrets come from `.env`, images are built

@@ -5,6 +5,7 @@
 **/target
 **/node_modules
 frontend
+mobile
 docs
 tests
 Requirement
